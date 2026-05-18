@@ -164,8 +164,8 @@ th { color:var(--muted); font-size:12px; }
       <p class="muted">Each day has its own section. Hours start at zero. Select site start and site finish from the 24-hour dropdowns to auto-calculate, manually adjust A/B/C hours, or choose Holiday or Bank Holiday for 8 hours normal pay.</p>
       <div style="height:12px"></div>
       <div class="grid grid2">
-        <div><label>Employee</label><select id="employeeSelect"></select></div>
-        <div><label>Week Ending Sunday</label><select id="timesheetDate"></select></div>
+        <div><label>Employee</label><select id="employeeSelect" onchange="refreshWeekEndingDropdown()"></select></div>
+        <div><label>Week Ending Sunday</label><select id="timesheetDate"></select><p class="muted small" style="margin-top:6px">Only outstanding Sunday week-ending dates are shown. Once submitted, that Sunday disappears from the list.</p></div>
       </div>
       <div id="daySections"></div>
     </div>
@@ -291,29 +291,47 @@ const employeeRates = {
 
 const workingAwayAllowanceRate = 1;
 
+function localISODate(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatWeekEndingLabel(dateString) {
+  const d = new Date(dateString + "T12:00:00");
+  return d.toLocaleDateString("en-GB", {
+    weekday: "long",
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+}
+
 function upcomingSundays(count = 20) {
-  // Include all Sundays in the current month first, then add future Sundays.
+  // True Sunday week-ending dates.
+  // Includes all Sundays in the current month, then future Sundays.
   const dates = [];
   const now = new Date();
 
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 12, 0, 0);
+  const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 12, 0, 0);
 
   const current = new Date(startOfMonth);
   while (current <= endOfMonth) {
     if (current.getDay() === 0) {
-      dates.push(current.toISOString().slice(0,10));
+      dates.push(localISODate(current));
     }
     current.setDate(current.getDate() + 1);
   }
 
-  const next = new Date(now);
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
   while (next.getDay() !== 0) {
     next.setDate(next.getDate() + 1);
   }
 
   while (dates.length < count) {
-    const iso = next.toISOString().slice(0,10);
+    const iso = localISODate(next);
     if (!dates.includes(iso)) dates.push(iso);
     next.setDate(next.getDate() + 7);
   }
@@ -452,7 +470,7 @@ function exportPayrollCSV() {
   downloadCSV("WGE_Monthly_Payroll_Totals.csv", rows);
 }
 
-function today() { return new Date().toISOString().slice(0,10); }
+function today() { return localISODate(new Date()); }
 function num(v) { return Number(v||0); }
 function round2(v) { return Math.round(v*100)/100; }
 
@@ -540,6 +558,29 @@ function login() {
 }
 function logout() { location.reload(); }
 
+
+function hasSubmittedWeek(employeeName, weekEndingDate) {
+  return submissions.some(s =>
+    s.employee === employeeName &&
+    s.date === weekEndingDate &&
+    s.status !== "Rejected"
+  );
+}
+
+function refreshWeekEndingDropdown() {
+  const ts = document.getElementById("timesheetDate");
+  const employeeSelect = document.getElementById("employeeSelect");
+  if (!ts || !employeeSelect) return;
+
+  const selectedEmployee = employeeSelect.value;
+  const allSundays = upcomingSundays(30);
+  const availableSundays = allSundays.filter(d => !hasSubmittedWeek(selectedEmployee, d));
+
+  ts.innerHTML = availableSundays.length
+    ? availableSundays.map(d => `<option value="${d}">${formatWeekEndingLabel(d)}</option>`).join("")
+    : `<option value="">No outstanding Sundays</option>`;
+}
+
 function setupSelects() {
   const allowed = currentUser.role==="admin" ? staff : [currentUser.name];
   ["employeeSelect","holidayEmployee"].forEach(id => {
@@ -554,9 +595,7 @@ function setupSelects() {
       .join("");
   }
 
-  const ts = document.getElementById("timesheetDate");
-  const sundays = upcomingSundays();
-  ts.innerHTML = sundays.map(d => `<option value="${d}">${d}</option>`).join("");
+  refreshWeekEndingDropdown();
   document.getElementById("holidayFrom").value = today();
   document.getElementById("holidayTo").value = today();
   updateHolidayDaysFromDates();
@@ -708,11 +747,15 @@ function calculateAll() {
 }
 function submitTimesheet() {
   if(!document.getElementById("signed").checked) { alert("Please tick the confirmation box first."); return; }
+  if(!document.getElementById("timesheetDate").value) {
+    alert("There are no outstanding Sunday week endings to submit for this employee.");
+    return;
+  }
   const t=calculateAll();
   const jobsForSubmission = jobs.map(j => ({...j, finalSite:getSiteName(j)}));
   submissions.push({id:Date.now(), employee:document.getElementById("employeeSelect").value, date:document.getElementById("timesheetDate").value, jobs:JSON.parse(JSON.stringify(jobsForSubmission)), totals:t, status:"Pending"});
   saveData();
-  document.getElementById("signed").checked=false; resetJobs(); renderAll(); approvalEmailDraft("Timesheet", document.getElementById("employeeSelect").value); alert("Timesheet submitted to Will Guy Electrical for approval.");
+  document.getElementById("signed").checked=false; resetJobs(); refreshWeekEndingDropdown(); renderAll(); approvalEmailDraft("Timesheet", document.getElementById("employeeSelect").value); alert("Timesheet submitted to Will Guy Electrical for approval.");
 }
 function submitHoliday() {
   updateHolidayDaysFromDates();
@@ -721,7 +764,7 @@ function submitHoliday() {
   document.getElementById("holidayNotes").value=""; renderAll(); approvalEmailDraft("Holiday", document.getElementById("holidayEmployee").value); alert("Holiday submitted for approval.");
 }
 function setStatus(type,id,status) {
-  const list=type==="timesheet"?submissions:holidayRequests; const item=list.find(x=>x.id==id); if(item) item.status=status; saveData(); renderAll();
+  const list=type==="timesheet"?submissions:holidayRequests; const item=list.find(x=>x.id==id); if(item) item.status=status; saveData(); refreshWeekEndingDropdown(); renderAll();
 }
 
 function changeMyPassword() {
