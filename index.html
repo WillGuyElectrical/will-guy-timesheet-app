@@ -165,7 +165,7 @@ th { color:var(--muted); font-size:12px; }
       <div style="height:12px"></div>
       <div class="grid grid2">
         <div><label>Employee</label><select id="employeeSelect"></select></div>
-        <div><label>Week Ending (Sunday only)</label><select id="timesheetDate"></select></div>
+        <div><label>Week Ending Sunday</label><select id="timesheetDate"></select></div>
       </div>
       <div id="daySections"></div>
     </div>
@@ -292,17 +292,32 @@ const employeeRates = {
 const workingAwayAllowanceRate = 1;
 
 function upcomingSundays(count = 20) {
+  // Include all Sundays in the current month first, then add future Sundays.
   const dates = [];
   const now = new Date();
-  const current = new Date(now);
-  while (current.getDay() !== 0) {
+
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+  const current = new Date(startOfMonth);
+  while (current <= endOfMonth) {
+    if (current.getDay() === 0) {
+      dates.push(current.toISOString().slice(0,10));
+    }
     current.setDate(current.getDate() + 1);
   }
-  for (let i = 0; i < count; i++) {
-    const d = new Date(current);
-    d.setDate(current.getDate() + (i * 7));
-    dates.push(d.toISOString().slice(0,10));
+
+  const next = new Date(now);
+  while (next.getDay() !== 0) {
+    next.setDate(next.getDate() + 1);
   }
+
+  while (dates.length < count) {
+    const iso = next.toISOString().slice(0,10);
+    if (!dates.includes(iso)) dates.push(iso);
+    next.setDate(next.getDate() + 7);
+  }
+
   return dates;
 }
 
