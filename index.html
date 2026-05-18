@@ -57,7 +57,7 @@ th { color:var(--muted); font-size:12px; }
 .small { font-size:13px; }
 @media print {
   body { background:white; color:#102033; }
-  .top, .tabs, button, #dashboard, #timesheet, #holiday, #approvals, #settings, #updates { display:none!important; }
+  .top, .tabs, button, #dashboard, #timesheet, #holiday, #approvals, #settings, #updates, #incomplete, #backup { display:none!important; }
   .wrap { padding:0; max-width:none; }
   #payroll { display:block!important; }
   .card { box-shadow:none; border:1px solid #dbe5ef; break-inside:avoid; }
@@ -69,6 +69,15 @@ th { color:var(--muted); font-size:12px; }
   .pdfHeader { display:flex!important; align-items:center; justify-content:space-between; margin-bottom:18px; border-bottom:4px solid #0f6ea8; padding-bottom:12px; }
   .pdfHeader img { max-width:260px; height:auto; }
 }
+
+#approvals, #payroll { font-size:16px; }
+#approvals table, #payroll table { font-size:16px; }
+#approvals th, #approvals td, #payroll th, #payroll td { padding:12px; }
+.bigStatus { font-size:18px; font-weight:900; }
+.backupPath { background:#f8fafc; border:1px dashed var(--border); border-radius:14px; padding:10px; margin-top:8px; font-size:15px; }
+.overdueCard { border-left:6px solid var(--red); }
+.okCard { border-left:6px solid var(--green); }
+
 </style>
 </head>
 <body>
@@ -103,13 +112,15 @@ th { color:var(--muted); font-size:12px; }
     <button id="tabUpdates" class="tab employeeOnly" onclick="showTab('updates')">My Updates <span id="employeeBadge" class="badge hidden">0</span></button>
     <button id="tabSettings" class="tab" onclick="showTab('settings')">Settings</button>
     <button id="tabApprovals" class="tab adminOnly hidden" onclick="showTab('approvals')">Approvals <span id="approvalBadge" class="badge hidden">0</span></button>
+    <button id="tabIncomplete" class="tab adminOnly hidden" onclick="showTab('incomplete')">Incomplete <span id="incompleteBadge" class="badge hidden">0</span></button>
+    <button id="tabBackup" class="tab adminOnly hidden" onclick="showTab('backup')">Backup</button>
     <button id="tabPayroll" class="tab adminOnly hidden" onclick="showTab('payroll')">Payroll</button>
   </div>
 
   <section id="dashboard">
     <div class="card"><h2>Live Database</h2><p class="muted small">Supabase live database connected. Timesheets and holidays now save centrally and sync across devices.</p></div>
     <div class="grid grid3">
-      <div class="card kpi"><div><p class="muted">Current Hours</p><strong id="kpiHours">0</strong></div><span>⏱️</span></div>
+      <div class="card kpi"><div><p class="muted">Live Hours</p><strong id="kpiHours">0</strong></div><span>⏱️</span></div>
       <div class="card kpi"><div><p class="muted">Holiday Left</p><strong id="kpiHoliday">20</strong></div><span>🌴</span></div>
       <div class="card kpi"><div><p class="muted">Submitted</p><strong id="kpiSubmitted">0</strong></div><span>✅</span></div>
     </div>
@@ -172,6 +183,38 @@ th { color:var(--muted); font-size:12px; }
   <section id="approvals" class="hidden">
     <div class="card"><h2>Timesheet Approvals</h2><p class="muted small">Pending items are highlighted for Wayne/David to action.</p><div id="timesheetApprovals"></div></div>
     <div class="card"><h2>Holiday Approvals</h2><p class="muted small">Holiday requests awaiting admin approval appear here.</p><div id="holidayApprovals"></div></div>
+  </section>
+
+
+  <section id="incomplete" class="hidden">
+    <div class="card">
+      <h2>Incomplete Timesheets</h2>
+      <p class="muted small">Timesheets should be submitted by 9:00am every Monday for the previous week. Missing weeks show here.</p>
+      <div id="incompleteTimesheets"></div>
+    </div>
+  </section>
+
+  <section id="backup" class="hidden">
+    <div class="card">
+      <h2>Dropbox Backup</h2>
+      <p class="muted small">This creates a full backup file from Supabase data. Download it, then save it into Dropbox.</p>
+      <div class="grid grid2" style="margin-top:12px">
+        <button class="btn" onclick="downloadFullBackup()">Download Full Backup JSON</button>
+        <button class="btn2" onclick="openDropboxFolder()">Open Dropbox</button>
+      </div>
+      <div class="backupPath">
+        Recommended Dropbox folder:<br>
+        <strong>Dropbox / Will Guy Electrical / Timesheet App Backups</strong>
+      </div>
+      <div class="backupPath">
+        Sub-folders to create/use:<br>
+        <strong>Approved Holidays</strong><br>
+        <strong>Approved Timesheets</strong><br>
+        <strong>Payroll Exports</strong><br>
+        <strong>Full Database Backups</strong>
+      </div>
+      <p class="muted small" style="margin-top:10px">Automatic Dropbox sync can be added later using Dropbox API + Vercel Cron. This gives you a safe manual backup now.</p>
+    </div>
   </section>
 
   <section id="payroll" class="hidden">
@@ -285,7 +328,7 @@ function setupSelects() {
 }
 
 function showTab(tab) {
-  ["dashboard","timesheet","holiday","updates","settings","approvals","payroll"].forEach(id=>{
+  ["dashboard","timesheet","holiday","updates","settings","approvals","incomplete","backup","payroll"].forEach(id=>{
     const sec=document.getElementById(id); if(sec) sec.classList.toggle("hidden",id!==tab);
     const t=document.getElementById("tab"+id[0].toUpperCase()+id.slice(1)); if(t) t.classList.toggle("active",id===tab);
   });
@@ -462,7 +505,7 @@ function holidayDateItemsForEmployee(employeeName) {
 }
 
 function renderHolidayBalances() {
-  const balances=staff.map(name=>{ const requestUsed=holidayRequests.filter(h=>h.employee===name&&h.status!=="Rejected").reduce((a,h)=>a+num(h.days),0); const timesheetHolidayUsed=submissions.filter(s=>s.employee===name&&s.status==="Approved").reduce((total,s)=>{ if(holidayRequestCoversDate(name,s.date)) return total; const holidayHours=(s.jobs||[]).filter(j=>j.site==="Holiday").reduce((a,j)=>a+num(j.holidayHours||j.a||0),0); return total+(holidayHours/8); },0); const used=requestUsed+timesheetHolidayUsed; return {name,used,requestUsed,timesheetHolidayUsed,left:20-used,items:holidayDateItemsForEmployee(name)}; });
+  const balances=staff.filter(name => name !== "Wayne Bonney" && name !== "David Guy").map(name=>{ const requestUsed=holidayRequests.filter(h=>h.employee===name&&h.status!=="Rejected").reduce((a,h)=>a+num(h.days),0); const timesheetHolidayUsed=submissions.filter(s=>s.employee===name&&s.status==="Approved").reduce((total,s)=>{ if(holidayRequestCoversDate(name,s.date)) return total; const holidayHours=(s.jobs||[]).filter(j=>j.site==="Holiday").reduce((a,j)=>a+num(j.holidayHours||j.a||0),0); return total+(holidayHours/8); },0); const used=requestUsed+timesheetHolidayUsed; return {name,used,requestUsed,timesheetHolidayUsed,left:20-used,items:holidayDateItemsForEmployee(name)}; });
   const visible=currentUser?.role==="admin"||currentUser?.role==="accountant"?balances:balances.filter(b=>b.name===currentUser?.name);
   document.getElementById("holidayBalances").innerHTML=visible.map(b=>{ const rows=b.items.length?`<div style="margin-top:12px;border:1px solid var(--border);border-radius:16px;overflow:hidden"><table><thead><tr><th>Holiday Dates</th><th>Days</th><th>Status</th><th>Source</th><th>Notes</th></tr></thead><tbody>${b.items.map(item=>`<tr><td><strong>${formatDateShort(item.from)}${item.to&&item.to!==item.from?" → "+formatDateShort(item.to):""}</strong><div class="small muted">${item.dates.map(formatDateShort).join(", ")}</div></td><td>${round2(item.days)}</td><td><span class="pill ${String(item.status||"pending").toLowerCase()}">${item.status}</span></td><td>${item.source}</td><td>${item.notes||""}</td></tr>`).join("")}</tbody></table></div>`:`<p class="muted small" style="margin-top:10px">No holiday dates recorded yet.</p>`; return `<div class="job"><div class="bar"><div><strong>${b.name}</strong><p class="small muted">${round2(b.used)} used/booked from 20. Holiday requests: ${round2(b.requestUsed)} day(s). Timesheet holidays: ${round2(b.timesheetHolidayUsed)} day(s).</p></div><strong style="font-size:22px;color:${b.left<0?"var(--red)":"var(--green)"}">${round2(b.left)} left</strong></div>${rows}</div>`; }).join("");
   const mine=balances.find(b=>b.name===(currentUser?.role==="employee"?currentUser.name:document.getElementById("holidayEmployee")?.value))||balances[0]; if(mine) document.getElementById("kpiHoliday").textContent=round2(mine.left);
@@ -557,7 +600,7 @@ function renderApprovals() {
         <span class="pill ${s.status.toLowerCase()}">${s.status}</span>
       </div>
       <p class="muted small" style="margin-top:6px">
-        Weekly totals: A ${round2(s.totals.a)} / B ${round2(s.totals.b)} / C ${round2(s.totals.c)} / Travel ${round2(s.totals.travel)} / Away ${round2(s.totals.away)}
+        <strong class="bigStatus">Weekly totals:</strong> A ${round2(s.totals.a)} / B ${round2(s.totals.b)} / C ${round2(s.totals.c)} / Travel ${round2(s.totals.travel)} / Away ${round2(s.totals.away)}
       </p>
       ${timesheetJobSummaryHtml(s)}
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
@@ -604,7 +647,139 @@ function printPayrollPDF() { showTab("payroll"); setTimeout(()=>window.print(),2
 async function changeMyPassword() { const current=document.getElementById("currentPassword").value, next=document.getElementById("newPassword").value, msg=document.getElementById("passwordMessage"); if(!next||next.length<4){ msg.style.color="var(--red)"; msg.textContent="Please enter a new password with at least 4 characters."; return; } if(current!==currentUser.password){ msg.style.color="var(--red)"; msg.textContent="Current password is incorrect."; return; } try{ await savePasswordForUser(currentUser.name,next); currentUser.password=next; msg.style.color="var(--green)"; msg.textContent="Password updated."; } catch(err){ msg.style.color="var(--red)"; msg.textContent="Could not save password."; } }
 async function adminResetPassword() { if(!currentUser||currentUser.role!=="admin") return; const name=document.getElementById("adminPasswordUser").value, next=document.getElementById("adminNewPassword").value, msg=document.getElementById("adminPasswordMessage"); if(!next||next.length<4){ msg.style.color="var(--red)"; msg.textContent="Please enter a password with at least 4 characters."; return; } try{ await savePasswordForUser(name,next); msg.style.color="var(--green)"; msg.textContent=`${name}'s password has been reset.`; document.getElementById("adminNewPassword").value=""; } catch(err){ msg.style.color="var(--red)"; msg.textContent="Could not reset password."; } }
 
-function renderAll() { renderDaySections(); calculateAll(); renderHolidayBalances(); renderApprovals(); renderPayroll(); renderEmployeeUpdates(); updateApprovalBadge(); updateEmployeeBadge(); document.getElementById("kpiSubmitted").textContent=submissions.length; }
+
+function previousSundayFromNow() {
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+  const day = d.getDay();
+  const diff = day === 0 ? 7 : day;
+  d.setDate(d.getDate() - diff);
+  return localISODate(d);
+}
+
+function isAfterMonday9am() {
+  const now = new Date();
+  const day = now.getDay();
+  if (day > 1) return true;
+  if (day < 1) return false;
+  return now.getHours() >= 9;
+}
+
+function incompleteTimesheetsForPreviousWeek() {
+  const weekEnding = previousSundayFromNow();
+  return staff.map(name => {
+    const submission = submissions.find(s => s.employee === name && s.date === weekEnding && s.status !== "Rejected");
+    return { name, weekEnding, submitted: !!submission, status: submission?.status || "Missing" };
+  });
+}
+
+function renderIncompleteTimesheets() {
+  const box = document.getElementById("incompleteTimesheets");
+  const badge = document.getElementById("incompleteBadge");
+  const tab = document.getElementById("tabIncomplete");
+  if (!box) return;
+
+  const rows = incompleteTimesheetsForPreviousWeek();
+  const missing = rows.filter(r => !r.submitted);
+  const overdue = isAfterMonday9am();
+
+  if (badge && tab) {
+    badge.textContent = missing.length;
+    badge.classList.toggle("hidden", missing.length === 0);
+    tab.classList.toggle("hasPending", missing.length > 0);
+  }
+
+  box.innerHTML = `
+    <div class="card ${missing.length ? "overdueCard" : "okCard"}" style="box-shadow:none">
+      <div class="bar">
+        <div>
+          <h3>Week ending ${formatWeekEndingLabel(rows[0]?.weekEnding || previousSundayFromNow())}</h3>
+          <p class="muted small">${overdue ? "Monday 9am deadline has passed." : "Deadline is Monday 9am."}</p>
+        </div>
+        <strong class="bigStatus">${missing.length ? missing.length + " missing" : "All submitted"}</strong>
+      </div>
+    </div>
+    ${rows.map(r => `
+      <div class="job ${!r.submitted && overdue ? "overdueCard" : r.submitted ? "okCard" : ""}">
+        <div class="bar">
+          <strong>${r.name}</strong>
+          <span class="pill ${r.submitted ? "approved" : "rejected"}">${r.submitted ? r.status : "Not submitted"}</span>
+        </div>
+        <p class="muted small">Required by 9:00am Monday for week ending ${formatWeekEndingLabel(r.weekEnding)}</p>
+      </div>
+    `).join("")}
+  `;
+}
+
+function currentDashboardHours() {
+  if (!currentUser) return 0;
+  if (currentUser.role === "employee") {
+    return submissions
+      .filter(s => s.employee === currentUser.name && s.status !== "Rejected")
+      .reduce((total, s) => total + num(s.totals?.a) + num(s.totals?.b) + num(s.totals?.c) + num(s.totals?.travel) + num(s.totals?.away), 0);
+  }
+  return submissions
+    .filter(s => s.status === "Pending")
+    .reduce((total, s) => total + num(s.totals?.a) + num(s.totals?.b) + num(s.totals?.c) + num(s.totals?.travel) + num(s.totals?.away), 0);
+}
+
+function approvedHolidaysBackupData() {
+  return holidayRequests.filter(h => h.status === "Approved");
+}
+
+function approvedTimesheetsBackupData() {
+  return submissions.filter(s => s.status === "Approved");
+}
+
+function downloadJSON(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function downloadFullBackup() {
+  const stamp = new Date().toISOString().slice(0,10);
+  const backup = {
+    created_at: new Date().toISOString(),
+    app: "Will Guy Electrical Timesheet App",
+    folders: {
+      approved_holidays: "Dropbox / Will Guy Electrical / Timesheet App Backups / Approved Holidays",
+      approved_timesheets: "Dropbox / Will Guy Electrical / Timesheet App Backups / Approved Timesheets",
+      payroll_exports: "Dropbox / Will Guy Electrical / Timesheet App Backups / Payroll Exports",
+      full_database_backups: "Dropbox / Will Guy Electrical / Timesheet App Backups / Full Database Backups"
+    },
+    timesheets: submissions,
+    holidays: holidayRequests,
+    approved_timesheets: approvedTimesheetsBackupData(),
+    approved_holidays: approvedHolidaysBackupData(),
+    users: users.map(u => ({name:u.name, role:u.role}))
+  };
+  downloadJSON(`WGE-full-backup-${stamp}.json`, backup);
+}
+
+function openDropboxFolder() {
+  window.open("https://www.dropbox.com/home", "_blank");
+}
+
+function renderAll() {
+  renderDaySections();
+  calculateAll();
+  renderHolidayBalances();
+  renderApprovals();
+  renderPayroll();
+  renderEmployeeUpdates();
+  updateApprovalBadge();
+  updateEmployeeBadge();
+  renderIncompleteTimesheets();
+  document.getElementById("kpiSubmitted").textContent = submissions.length;
+  document.getElementById("kpiHours").textContent = round2(currentDashboardHours());
+}
 </script>
 </body>
 </html>
