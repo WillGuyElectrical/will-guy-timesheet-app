@@ -341,7 +341,7 @@ function upcomingSundays(count = 20) {
 
 function loadSavedPasswords() {
   try {
-    const saved = JSON.parse(localStorage.getItem("wge_passwords_v5_clean") || "{}");
+    const saved = JSON.parse(localStorage.getItem("wge_passwords_v6_clean") || "{}");
     users.forEach(u => {
       if (saved[u.name]) u.password = saved[u.name];
     });
@@ -349,9 +349,9 @@ function loadSavedPasswords() {
 }
 
 function savePasswordForUser(name, password) {
-  const saved = JSON.parse(localStorage.getItem("wge_passwords_v5_clean") || "{}");
+  const saved = JSON.parse(localStorage.getItem("wge_passwords_v6_clean") || "{}");
   saved[name] = password;
-  localStorage.setItem("wge_passwords_v5_clean", JSON.stringify(saved));
+  localStorage.setItem("wge_passwords_v6_clean", JSON.stringify(saved));
   const user = users.find(u => u.name === name);
   if (user) user.password = password;
 }
@@ -364,14 +364,14 @@ const sites = ["Long Sutton","McCormick's","Mizkan","Team","Ashco","Kensal","Hol
 let currentUser = null, jobs = [], submissions = [], holidayRequests = [];
 
 function saveData() {
-  localStorage.setItem("wge_submissions_v5_clean_blank", JSON.stringify(submissions));
-  localStorage.setItem("wge_holidays_v5_clean_blank", JSON.stringify(holidayRequests));
+  localStorage.setItem("wge_submissions_v6_clean_blank", JSON.stringify(submissions));
+  localStorage.setItem("wge_holidays_v6_clean_blank", JSON.stringify(holidayRequests));
 }
 
 function loadData() {
   try {
-    submissions = JSON.parse(localStorage.getItem("wge_submissions_v5_clean_blank") || "[]");
-    holidayRequests = JSON.parse(localStorage.getItem("wge_holidays_v5_clean_blank") || "[]");
+    submissions = JSON.parse(localStorage.getItem("wge_submissions_v6_clean_blank") || "[]");
+    holidayRequests = JSON.parse(localStorage.getItem("wge_holidays_v6_clean_blank") || "[]");
   } catch(e) {
     submissions = [];
     holidayRequests = [];
@@ -510,13 +510,18 @@ function submissionHasHolidayOnDate(employee, date) {
     s.jobs.some(j => j.site === "Holiday")
   );
 }
-function approvedHolidayRequestExists(employee, date) {
+
+function holidayRequestCoversDate(employee, date) {
   return holidayRequests.some(h =>
     h.employee === employee &&
     h.status === "Approved" &&
     date >= h.from &&
     date <= h.to
   );
+}
+
+function approvedHolidayRequestExists(employee, date) {
+  return holidayRequestCoversDate(employee, date);
 }
 
 function makeTimeOptions(startHour, endHour) {
@@ -534,6 +539,13 @@ function makeTimeOptions(startHour, endHour) {
 
 const siteStartOptions = makeTimeOptions(5, 16);
 const siteFinishOptions = makeTimeOptions(9, 24);
+
+
+function siteOptionsForDay(day) {
+  return (day === "Saturday" || day === "Sunday")
+    ? sites.filter(site => site !== "Holiday" && site !== "Bank Holiday")
+    : sites;
+}
 
 function optionList(options, selected) {
   return `<option value="">Select time</option>` + options.map(t => `<option value="${t}" ${selected === t ? "selected" : ""}>${t}</option>`).join("");
@@ -688,6 +700,15 @@ function updateJob(id, field, value) {
     j.holidayHours = 8;
     j.manual = true;
   }
+  if(field === "day" && (value === "Saturday" || value === "Sunday") && (j.site === "Holiday" || j.site === "Bank Holiday")) {
+    j.site = "";
+    j.description = "";
+    j.a = 0;
+    j.b = 0;
+    j.c = 0;
+    j.holidayHours = 0;
+    j.manual = false;
+  }
   if(["day","start","finish"].includes(field) && !j.manual) Object.assign(j, autoSplit(j));
   renderAll();
 }
@@ -717,7 +738,7 @@ function jobHtml(j,i) {
     <div class="jobTitle"><strong>Job ${i+1} — ${j.day}</strong><button class="btnRed" onclick="removeJob('${j.id}')">Remove</button></div>
     <div class="grid grid4">
       <div><label>Job No.</label><input value="${j.jobNo}" oninput="updateJobText('${j.id}','jobNo',this.value)" placeholder="WB..."></div>
-      <div><label>Site / Holiday</label><select onchange="updateSite('${j.id}',this.value)"><option value="">Select site</option>${sites.map(site=>`<option value="${site}" ${j.site===site?"selected":""}>${site}</option>`).join("")}</select></div>
+      <div><label>Site / Holiday</label><select onchange="updateSite('${j.id}',this.value)"><option value="">Select site</option>${siteOptionsForDay(j.day).map(site=>`<option value="${site}" ${j.site===site?"selected":""}>${site}</option>`).join("")}</select></div>
       ${j.site==="Manual" ? `<div><label>Enter Site Location</label><input value="${j.manualSite||""}" oninput="updateJobText('${j.id}','manualSite',this.value)" placeholder="e.g. Coca-Cola"></div>` : ""}
       ${(j.site==="Ashco" || j.site==="Kensal") ? `<div><label>${j.site} Site Address</label><input value="${j.siteAddress||""}" oninput="updateJobText('${j.id}','siteAddress',this.value)" placeholder="Enter site address"></div>` : ""}
       <div><label>Description</label><input value="${j.description}" oninput="updateJobText('${j.id}','description',this.value)" placeholder="Works done"></div>
@@ -763,6 +784,15 @@ function submitHoliday() {
   saveData();
   document.getElementById("holidayNotes").value=""; renderAll(); approvalEmailDraft("Holiday", document.getElementById("holidayEmployee").value); alert("Holiday submitted for approval.");
 }
+
+function deleteHolidayRequest(id) {
+  if (!currentUser || currentUser.role !== "admin") return;
+  if (!confirm("Delete this holiday request? This cannot be undone.")) return;
+  holidayRequests = holidayRequests.filter(h => String(h.id) !== String(id));
+  saveData();
+  renderAll();
+}
+
 function setStatus(type,id,status) {
   const list=type==="timesheet"?submissions:holidayRequests; const item=list.find(x=>x.id==id); if(item) item.status=status; saveData(); refreshWeekEndingDropdown(); renderAll();
 }
@@ -858,7 +888,7 @@ function renderHolidayHistory() {
           <strong>${h.employee}</strong>
           <span class="pill ${String(h.status || "pending").toLowerCase()}">${h.status || "Pending"}</span>
         </div>
-        <p class="small muted">${h.from} → ${h.to} (${h.days} day(s))</p>
+        <p class="small muted">${h.from} → ${h.to} (${h.days} day(s))</p>${currentUser?.role === "admin" ? `<div style="margin-top:8px"><button class="btnRed" onclick="deleteHolidayRequest('${h.id}')">Delete Holiday</button></div>` : ""}
       </div>
     `).join("") : "<p class='muted'>No holiday records yet.</p>";
   }
@@ -923,7 +953,7 @@ function approvalEmailDraft(type, employee) {
 function renderApprovals() {
   const ts=document.getElementById("timesheetApprovals"), hs=document.getElementById("holidayApprovals");
   ts.innerHTML=submissions.length?submissions.map(s=>`<div class="job"><div class="bar"><strong>${s.employee} — ${s.date}</strong><span class="pill ${s.status.toLowerCase()}">${s.status}</span></div><p class="muted small">A ${round2(s.totals.a)} / B ${round2(s.totals.b)} / C ${round2(s.totals.c)} / Travel ${round2(s.totals.travel)} / Away ${round2(s.totals.away)}</p><div style="display:flex;gap:8px;margin-top:8px"><button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button></div></div>`).join(""):"<p class='muted'>No timesheets submitted.</p>";
-  hs.innerHTML=holidayRequests.length?holidayRequests.map(h=>`<div class="job"><div class="bar"><strong>${h.employee} — ${h.days} days</strong><span class="pill ${h.status.toLowerCase()}">${h.status}</span></div><p class="muted small">${h.from} to ${h.to} — ${h.notes||"No notes"}</p><div style="display:flex;gap:8px;margin-top:8px"><button class="btnGreen" onclick="setStatus('holiday','${h.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('holiday','${h.id}','Rejected')">Reject</button></div></div>`).join(""):"<p class='muted'>No holiday requests.</p>";
+  hs.innerHTML=holidayRequests.length?holidayRequests.map(h=>`<div class="job"><div class="bar"><strong>${h.employee} — ${h.days} days</strong><span class="pill ${h.status.toLowerCase()}">${h.status}</span></div><p class="muted small">${h.from} to ${h.to} — ${h.notes||"No notes"}</p><div style="display:flex;gap:8px;margin-top:8px"><button class="btnGreen" onclick="setStatus('holiday','${h.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('holiday','${h.id}','Rejected')">Reject</button><button class="btnRed" onclick="deleteHolidayRequest('${h.id}')">Delete</button></div></div>`).join(""):"<p class='muted'>No holiday requests.</p>";
 }
 
 function formatDateShort(dateString) {
@@ -971,7 +1001,7 @@ function holidayDateItemsForEmployee(employeeName) {
   submissions
     .filter(s => s.employee === employeeName && s.status === "Approved")
     .forEach(s => {
-      const approvedRequestExists = approvedHolidayRequestExists(employeeName, s.date);
+      const approvedRequestExists = holidayRequestCoversDate(employeeName, s.date);
       if (approvedRequestExists) return;
 
       const holidayJobs = (s.jobs || []).filter(j => j.site === "Holiday");
@@ -1001,7 +1031,7 @@ function renderHolidayBalances() {
     const timesheetHolidayUsed = submissions
       .filter(s => s.employee === name && s.status === "Approved")
       .reduce((total, s) => {
-        const hasApprovedRequest = approvedHolidayRequestExists(name, s.date);
+        const hasApprovedRequest = holidayRequestCoversDate(name, s.date);
         if (hasApprovedRequest) return total;
         const holidayHours = (s.jobs || [])
           .filter(j => j.site === "Holiday")
