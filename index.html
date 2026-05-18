@@ -149,19 +149,20 @@ th { color:var(--muted); font-size:12px; }
   </div>
 
   <section id="dashboard">
+    <div class="card"><h2>Live Database</h2><p class="muted small">Supabase live database connected. Timesheets and holidays now save centrally and sync across devices.</p></div>
     <div class="grid grid3">
       <div class="card kpi"><div><p class="muted">Current Hours</p><strong id="kpiHours">0</strong></div><span>⏱️</span></div>
       <div class="card kpi"><div><p class="muted">Holiday Left</p><strong id="kpiHoliday">20</strong></div><span>🌴</span></div>
       <div class="card kpi"><div><p class="muted">Submitted</p><strong id="kpiSubmitted">0</strong></div><span>✅</span></div>
     </div>
     <div class="card"><h2>Quick Actions</h2><div class="grid grid2"><button class="btn" onclick="showTab('timesheet')">Open Timesheet</button><button class="btn2" onclick="showTab('holiday')">Request Holiday</button></div></div><div class="card employeeOnly"><h2>My Updates</h2><p class="muted small">If Wayne or David approves/rejects a timesheet or holiday, a green badge will appear on My Updates.</p></div>
-    <div class="card adminOnly hidden"><h2>Approval Alerts</h2><p class="muted small">The red badge on Approvals shows pending timesheets and holiday requests. Real automatic email alerts will work once the app is hosted with a database/email service.</p></div><div class="card"><h2>Storage note</h2><p class="muted small">This prototype now saves submitted timesheets and holidays in this browser using local storage. For proper business use across all phones and laptops, this should move to a real database such as Supabase, with Dropbox used for documents/photos.</p></div>
+    <div class="card adminOnly hidden"><h2>Approval Alerts</h2><p class="muted small">The red badge on Approvals shows pending timesheets and holiday requests. Real automatic email alerts will work once the app is hosted with a database/email service.</p></div><div class="card"><h2>Storage note</h2><p class="muted small">This app is now connected to Supabase, so timesheets, holidays and approvals sync across phones/laptops.</p></div>
   </section>
 
   <section id="timesheet" class="hidden">
     <div class="card">
       <h2>Timesheet</h2>
-      <p class="muted">Each day has its own section. Hours start at zero. Select site start and site finish from the 24-hour dropdowns to auto-calculate, manually adjust A/B/C hours, or choose Holiday or Bank Holiday for 8 hours normal pay.</p>
+      <p class="muted">Each day has its own section. Hours start at zero. Select site start and site finish from the 24-hour dropdowns to auto-calculate. Dinner break is only deducted once per day, manually adjust A/B/C hours, or choose Holiday or Bank Holiday for 8 hours normal pay.</p>
       <div style="height:12px"></div>
       <div class="grid grid2">
         <div><label>Employee</label><select id="employeeSelect" onchange="refreshWeekEndingDropdown()"></select></div>
@@ -170,7 +171,7 @@ th { color:var(--muted); font-size:12px; }
       <div id="daySections"></div>
     </div>
     <div class="card">
-      <h2>Totals</h2>
+      <h2>Totals</h2><p class="muted small">Dinner break is deducted once per day only, even if there are multiple jobs on that day.</p>
       <div class="grid grid3">
         <p>A Normal: <strong id="totalA">0</strong></p><p>B 1.5x: <strong id="totalB">0</strong></p><p>C Double: <strong id="totalC">0</strong></p>
         <p>Travel: <strong id="totalTravel">0</strong></p><p>Working Away: <strong id="totalAway">0</strong></p><p>Total: <strong id="totalHours">0</strong></p>
@@ -348,35 +349,171 @@ function loadSavedPasswords() {
   } catch(e) {}
 }
 
-function savePasswordForUser(name, password) {
-  const saved = JSON.parse(localStorage.getItem("wge_passwords_v6_clean") || "{}");
-  saved[name] = password;
-  localStorage.setItem("wge_passwords_v6_clean", JSON.stringify(saved));
+async function savePasswordForUser(name, password) {
   const user = users.find(u => u.name === name);
   if (user) user.password = password;
+
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/users?name=eq.${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      headers: supabaseHeaders(),
+      body: JSON.stringify({password})
+    });
+    if (!res.ok) throw new Error(await res.text());
+  } catch (err) {
+    console.error("Password update failed", err);
+    alert("Password changed in this session but could not be saved to Supabase.");
+  }
 }
 
 loadSavedPasswords();
 
-const staff = users.filter(u=>u.role==="employee").map(u=>u.name);
-const days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
-const sites = ["Long Sutton","McCormick's","Mizkan","Team","Ashco","Kensal","Holiday","Bank Holiday","Manual"];
-let currentUser = null, jobs = [], submissions = [], holidayRequests = [];
 
-function saveData() {
-  localStorage.setItem("wge_submissions_v6_clean_blank", JSON.stringify(submissions));
-  localStorage.setItem("wge_holidays_v6_clean_blank", JSON.stringify(holidayRequests));
+const SUPABASE_URL = "https://aktpqkwilspsjdaofltw.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFrdHBxa3dpbHNwc2pkYW9mbHR3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDkxNTIsImV4cCI6MjA5NDY4NTE1Mn0.YN0FtPZWDy6Ddb_BrUazD5ecRIlo1xl58lJUd5pyxQ0";
+
+function supabaseHeaders(extra = {}) {
+  return {
+    "apikey": SUPABASE_ANON_KEY,
+    "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+    "Content-Type": "application/json",
+    "Prefer": "return=representation",
+    ...extra
+  };
 }
 
-function loadData() {
+async function sbGet(table) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*`, {
+    headers: supabaseHeaders({"Prefer": ""})
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
+
+async function sbInsert(table, row) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: "POST",
+    headers: supabaseHeaders(),
+    body: JSON.stringify(row)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data[0];
+}
+
+async function sbPatch(table, id, patch) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: supabaseHeaders(),
+    body: JSON.stringify(patch)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data[0];
+}
+
+async function sbDelete(table, id) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: supabaseHeaders()
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+function dbTimesheetToApp(row) {
+  return {
+    id: row.id,
+    employee: row.employee,
+    date: row.week_ending,
+    status: row.status || "Pending",
+    submittedAt: row.submitted_at,
+    totals: row.totals || {a:0,b:0,c:0,travel:0,away:0},
+    jobs: row.jobs || []
+  };
+}
+
+function appTimesheetToDb(item) {
+  return {
+    employee: item.employee,
+    week_ending: item.date,
+    status: item.status || "Pending",
+    totals: item.totals || {},
+    jobs: item.jobs || []
+  };
+}
+
+function dbHolidayToApp(row) {
+  return {
+    id: row.id,
+    employee: row.employee,
+    from: row.start_date,
+    to: row.end_date,
+    days: Number(row.days || 0),
+    status: row.status || "Pending",
+    notes: row.notes || ""
+  };
+}
+
+function appHolidayToDb(item) {
+  return {
+    employee: item.employee,
+    start_date: item.from,
+    end_date: item.to,
+    days: Number(item.days || 0),
+    status: item.status || "Pending",
+    notes: item.notes || ""
+  };
+}
+
+async function loadData() {
   try {
-    submissions = JSON.parse(localStorage.getItem("wge_submissions_v6_clean_blank") || "[]");
-    holidayRequests = JSON.parse(localStorage.getItem("wge_holidays_v6_clean_blank") || "[]");
-  } catch(e) {
-    submissions = [];
-    holidayRequests = [];
+    const [dbTimesheets, dbHolidays, dbUsers] = await Promise.all([
+      sbGet("timesheets"),
+      sbGet("holidays"),
+      sbGet("users")
+    ]);
+
+    submissions = dbTimesheets.map(dbTimesheetToApp);
+    holidayRequests = dbHolidays.map(dbHolidayToApp);
+
+    dbUsers.forEach(dbUser => {
+      const existing = users.find(u => u.name === dbUser.name);
+      if (existing) {
+        existing.role = dbUser.role || existing.role;
+        existing.password = dbUser.password || existing.password;
+      }
+    });
+  } catch (err) {
+    console.error("Supabase load failed", err);
+    alert("Could not load live data from Supabase. Check RLS is off on timesheets, holidays and users.");
   }
 }
+
+async function saveTimesheetToSupabase(item) {
+  const saved = await sbInsert("timesheets", appTimesheetToDb(item));
+  item.id = saved.id;
+  return item;
+}
+
+async function saveHolidayToSupabase(item) {
+  const saved = await sbInsert("holidays", appHolidayToDb(item));
+  item.id = saved.id;
+  return item;
+}
+
+async function updateTimesheetStatusSupabase(id, status) {
+  return await sbPatch("timesheets", id, {status});
+}
+
+async function updateHolidayStatusSupabase(id, status) {
+  return await sbPatch("holidays", id, {status});
+}
+
+async function deleteHolidaySupabase(id) {
+  return await sbDelete("holidays", id);
+}
+
+
 
 function downloadCSV(filename, rows) {
   const csv = rows.map(row => row.map(cell => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
@@ -551,12 +688,12 @@ function optionList(options, selected) {
   return `<option value="">Select time</option>` + options.map(t => `<option value="${t}" ${selected === t ? "selected" : ""}>${t}</option>`).join("");
 }
 
-function login() {
+async function login() {
   const name = document.getElementById("loginUser").value, pass = document.getElementById("loginPass").value;
   const found = users.find(u=>u.name===name && u.password===pass);
   if(!found) { document.getElementById("loginError").textContent = "Incorrect password. Starter password is the user's first name."; return; }
   currentUser = found;
-  loadData();
+  await loadData();
   document.getElementById("login").classList.add("hidden");
   document.getElementById("app").classList.remove("hidden");
   document.getElementById("currentName").textContent = currentUser.name;
@@ -640,6 +777,65 @@ function autoSplit(job) {
   if(job.day==="Sunday") return {a:0,b:0,c:round2(total)};
   return {a:round2(Math.min(total,8)),b:round2(Math.max(total-8,0)),c:0};
 }
+
+function isAutoHoursJob(job) {
+  return job &&
+    job.site !== "Holiday" &&
+    job.site !== "Bank Holiday" &&
+    !job.manual &&
+    job.start &&
+    job.finish;
+}
+
+function splitDayHours(day, totalHours) {
+  const total = Math.max(0, round2(totalHours));
+  if (day === "Saturday") return {a:0, b:total, c:0};
+  if (day === "Sunday") return {a:0, b:0, c:total};
+  return {a:round2(Math.min(total, 8)), b:round2(Math.max(total - 8, 0)), c:0};
+}
+
+function recalculateDayHours(day) {
+  const dayJobs = jobs.filter(j => j.day === day && isAutoHoursJob(j));
+  if (!dayJobs.length) return;
+
+  const rawHours = dayJobs.map(j => Math.max(0, minutesBetween(j.start, j.finish) / 60));
+  const rawTotal = rawHours.reduce((a,b) => a + b, 0);
+  const paidTotal = Math.max(0, rawTotal - 0.5);
+
+  const daySplit = splitDayHours(day, paidTotal);
+  let remainingA = daySplit.a;
+  let remainingB = daySplit.b;
+  let remainingC = daySplit.c;
+  let remainingPaid = paidTotal;
+
+  dayJobs.forEach((job, index) => {
+    let jobPaidHours = index === dayJobs.length - 1
+      ? remainingPaid
+      : Math.min(rawHours[index], remainingPaid);
+
+    jobPaidHours = round2(Math.max(0, jobPaidHours));
+    remainingPaid = round2(Math.max(0, remainingPaid - jobPaidHours));
+
+    const useA = Math.min(jobPaidHours, remainingA);
+    job.a = round2(useA);
+    remainingA = round2(Math.max(0, remainingA - useA));
+    jobPaidHours = round2(Math.max(0, jobPaidHours - useA));
+
+    const useB = Math.min(jobPaidHours, remainingB);
+    job.b = round2(useB);
+    remainingB = round2(Math.max(0, remainingB - useB));
+    jobPaidHours = round2(Math.max(0, jobPaidHours - useB));
+
+    const useC = Math.min(jobPaidHours, remainingC);
+    job.c = round2(useC);
+    remainingC = round2(Math.max(0, remainingC - useC));
+  });
+}
+
+function recalculateAllAutoHours() {
+  days.forEach(day => recalculateDayHours(day));
+}
+
 function updateJobText(id, field, value) {
   const j=jobs.find(x=>x.id==id); 
   if(!j) return;
@@ -687,7 +883,9 @@ function updateSite(id, value) {
 
 function updateJob(id, field, value) {
   const j=jobs.find(x=>x.id==id); if(!j) return;
+  const oldDay = j.day;
   j[field]=value;
+
   if(field === "site" && value === "Holiday") {
     j.description = "Holiday pay";
     j.start = "";
@@ -700,6 +898,20 @@ function updateJob(id, field, value) {
     j.holidayHours = 8;
     j.manual = true;
   }
+
+  if(field === "site" && value === "Bank Holiday") {
+    j.description = "Bank holiday pay";
+    j.start = "";
+    j.finish = "";
+    j.a = 8;
+    j.b = 0;
+    j.c = 0;
+    j.travel = 0;
+    j.away = 0;
+    j.holidayHours = 0;
+    j.manual = true;
+  }
+
   if(field === "day" && (value === "Saturday" || value === "Sunday") && (j.site === "Holiday" || j.site === "Bank Holiday")) {
     j.site = "";
     j.description = "";
@@ -709,7 +921,12 @@ function updateJob(id, field, value) {
     j.holidayHours = 0;
     j.manual = false;
   }
-  if(["day","start","finish"].includes(field) && !j.manual) Object.assign(j, autoSplit(j));
+
+  if(["day","start","finish"].includes(field)) {
+    recalculateDayHours(oldDay);
+    recalculateDayHours(j.day);
+  }
+
   renderAll();
 }
 function updateHours(id, field, value) {
@@ -748,10 +965,10 @@ function jobHtml(j,i) {
       <div><label>A Normal</label><input type="number" step="0.25" value="${j.a}" oninput="updateHours('${j.id}','a',this.value)"></div>
       <div><label>B 1.5x</label><input type="number" step="0.25" value="${j.b}" oninput="updateHours('${j.id}','b',this.value)"></div>
       <div><label>C Double</label><input type="number" step="0.25" value="${j.c}" oninput="updateHours('${j.id}','c',this.value)"></div>
-      <div><label>Travel</label><input type="number" step="0.25" value="${j.travel}" oninput="updateJob('${j.id}','travel',this.value)"></div>
-      <div><label>Working Away</label><input type="number" step="0.25" value="${j.away}" oninput="updateJob('${j.id}','away',this.value)"></div>
+      <div><label>Travel</label><input type="text" inputmode="decimal" value="${j.travel}" oninput="updateJob('${j.id}','travel',this.value)"></div>
+      <div><label>Working Away</label><input type="text" inputmode="decimal" value="${j.away}" oninput="updateJob('${j.id}','away',this.value)"></div>
     </div>
-    <p class="muted small" style="margin-top:8px">${j.site==="Manual" && j.manualSite ? "Site saved as: " + j.manualSite + ". " : ""}${(j.site==="Ashco" || j.site==="Kensal") && j.siteAddress ? "Site saved as: " + j.site + " - " + j.siteAddress + ". " : ""}${j.manual ? "Manual hours adjusted." : "Auto-calculated from site start/finish less 30-minute break."}</p>
+    <p class="muted small" style="margin-top:8px">${j.site==="Manual" && j.manualSite ? "Site saved as: " + j.manualSite + ". " : ""}${(j.site==="Ashco" || j.site==="Kensal") && j.siteAddress ? "Site saved as: " + j.site + " - " + j.siteAddress + ". " : ""}${j.manual ? "Manual hours adjusted." : "Auto-calculated from site start/finish. Dinner break is deducted once per day."}</p>
   </div>`;
 }
 
@@ -766,38 +983,71 @@ function calculateAll() {
   document.getElementById("kpiHours").textContent=round2(t.a+t.b+t.c+t.travel+t.away);
   return t;
 }
-function submitTimesheet() {
+async function submitTimesheet() {
   if(!document.getElementById("signed").checked) { alert("Please tick the confirmation box first."); return; }
   if(!document.getElementById("timesheetDate").value) {
     alert("There are no outstanding Sunday week endings to submit for this employee.");
     return;
   }
+  recalculateAllAutoHours();
   const t=calculateAll();
   const jobsForSubmission = jobs.map(j => ({...j, finalSite:getSiteName(j)}));
-  submissions.push({id:Date.now(), employee:document.getElementById("employeeSelect").value, date:document.getElementById("timesheetDate").value, jobs:JSON.parse(JSON.stringify(jobsForSubmission)), totals:t, status:"Pending"});
-  saveData();
+  const newSubmission = {employee:document.getElementById("employeeSelect").value, date:document.getElementById("timesheetDate").value, jobs:JSON.parse(JSON.stringify(typeof jobsForSubmission !== "undefined" ? jobsForSubmission : jobs)), totals:t, status:"Pending"};
+  try {
+    await saveTimesheetToSupabase(newSubmission);
+    submissions.push(newSubmission);
+  } catch (err) {
+    console.error("Timesheet save failed", err);
+    alert("Could not save this timesheet to Supabase. Please try again.");
+    return;
+  }
   document.getElementById("signed").checked=false; resetJobs(); refreshWeekEndingDropdown(); renderAll(); approvalEmailDraft("Timesheet", document.getElementById("employeeSelect").value); alert("Timesheet submitted to Will Guy Electrical for approval.");
 }
-function submitHoliday() {
+async function submitHoliday() {
   updateHolidayDaysFromDates();
-  holidayRequests.push({id:Date.now(), employee:document.getElementById("holidayEmployee").value, from:document.getElementById("holidayFrom").value, to:document.getElementById("holidayTo").value, days:num(document.getElementById("holidayDays").value), notes:document.getElementById("holidayNotes").value, status:"Pending"});
-  saveData();
+  const newHoliday = {employee:document.getElementById("holidayEmployee").value, from:document.getElementById("holidayFrom").value, to:document.getElementById("holidayTo").value, days:num(document.getElementById("holidayDays").value), notes:document.getElementById("holidayNotes").value, status:"Pending"};
+  try {
+    await saveHolidayToSupabase(newHoliday);
+    holidayRequests.push(newHoliday);
+  } catch (err) {
+    console.error("Holiday save failed", err);
+    alert("Could not save this holiday request to Supabase. Please try again.");
+    return;
+  }
   document.getElementById("holidayNotes").value=""; renderAll(); approvalEmailDraft("Holiday", document.getElementById("holidayEmployee").value); alert("Holiday submitted for approval.");
 }
 
-function deleteHolidayRequest(id) {
+async function deleteHolidayRequest(id) {
   if (!currentUser || currentUser.role !== "admin") return;
   if (!confirm("Delete this holiday request? This cannot be undone.")) return;
-  holidayRequests = holidayRequests.filter(h => String(h.id) !== String(id));
-  saveData();
-  renderAll();
+  try {
+    await deleteHolidaySupabase(id);
+    holidayRequests = holidayRequests.filter(h => String(h.id) !== String(id));
+    renderAll();
+  } catch (err) {
+    console.error("Holiday delete failed", err);
+    alert("Could not delete this holiday request from Supabase.");
+  }
 }
 
-function setStatus(type,id,status) {
-  const list=type==="timesheet"?submissions:holidayRequests; const item=list.find(x=>x.id==id); if(item) item.status=status; saveData(); refreshWeekEndingDropdown(); renderAll();
+async function setStatus(type,id,status) {
+  const list=type==="timesheet"?submissions:holidayRequests;
+  const item=list.find(x=>String(x.id)===String(id));
+  if(!item) return;
+
+  try {
+    if(type==="timesheet") await updateTimesheetStatusSupabase(id, status);
+    if(type==="holiday") await updateHolidayStatusSupabase(id, status);
+    item.status=status;
+    refreshWeekEndingDropdown();
+    renderAll();
+  } catch (err) {
+    console.error("Status update failed", err);
+    alert("Could not update approval status in Supabase.");
+  }
 }
 
-function changeMyPassword() {
+async function changeMyPassword() {
   const current = document.getElementById("currentPassword").value;
   const next = document.getElementById("newPassword").value;
   const msg = document.getElementById("passwordMessage");
@@ -814,7 +1064,7 @@ function changeMyPassword() {
     return;
   }
 
-  savePasswordForUser(currentUser.name, next);
+  await savePasswordForUser(currentUser.name, next);
   currentUser.password = next;
   document.getElementById("currentPassword").value = "";
   document.getElementById("newPassword").value = "";
@@ -822,7 +1072,7 @@ function changeMyPassword() {
   msg.textContent = "Password updated.";
 }
 
-function adminResetPassword() {
+async function adminResetPassword() {
   if (!currentUser || currentUser.role !== "admin") return;
   const name = document.getElementById("adminPasswordUser").value;
   const next = document.getElementById("adminNewPassword").value;
@@ -834,7 +1084,7 @@ function adminResetPassword() {
     return;
   }
 
-  savePasswordForUser(name, next);
+  await savePasswordForUser(name, next);
   document.getElementById("adminNewPassword").value = "";
   msg.style.color = "var(--green)";
   msg.textContent = `${name}'s password has been reset.`;
