@@ -479,10 +479,108 @@ async function deleteHolidayRequest(id) {
   catch(err) { console.error(err); alert("Could not delete this holiday request from Supabase."); }
 }
 
+
+function submittedJobSite(job) {
+  return job.finalSite || job.manualSite || job.site || "";
+}
+
+function submittedJobHours(job) {
+  const a = num(job.a);
+  const b = num(job.b);
+  const c = num(job.c);
+  const travel = num(job.travel);
+  const away = num(job.away);
+  return { a, b, c, travel, away, total: round2(a + b + c + travel + away) };
+}
+
+function timesheetJobSummaryHtml(timesheet) {
+  const grouped = {};
+  (timesheet.jobs || []).forEach(job => {
+    const day = job.day || "Unassigned";
+    if (!grouped[day]) grouped[day] = [];
+    grouped[day].push(job);
+  });
+
+  const dayOrder = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  const orderedDays = dayOrder.filter(day => grouped[day]?.length);
+
+  if (!orderedDays.length) {
+    return "<p class='muted small' style='margin-top:8px'>No job lines recorded.</p>";
+  }
+
+  return `<div style="margin-top:10px;border:1px solid var(--border);border-radius:16px;overflow:hidden;overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th>Day</th>
+          <th>Site / Job</th>
+          <th>Start</th>
+          <th>Finish</th>
+          <th>A</th>
+          <th>B</th>
+          <th>C</th>
+          <th>Travel</th>
+          <th>Away</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${orderedDays.map(day => grouped[day].map(job => {
+          const h = submittedJobHours(job);
+          return `<tr>
+            <td><strong>${day}</strong></td>
+            <td>
+              <strong>${submittedJobSite(job) || "Site not entered"}</strong>
+              <div class="small muted">${job.jobNo ? "Job " + job.jobNo + " — " : ""}${job.description || ""}</div>
+            </td>
+            <td>${job.start || "-"}</td>
+            <td>${job.finish || "-"}</td>
+            <td>${round2(h.a)}</td>
+            <td>${round2(h.b)}</td>
+            <td>${round2(h.c)}</td>
+            <td>${round2(h.travel)}</td>
+            <td>${round2(h.away)}</td>
+            <td><strong>${round2(h.total)}</strong></td>
+          </tr>`;
+        }).join("")).join("")}
+      </tbody>
+    </table>
+  </div>`;
+}
+
 function renderApprovals() {
   const ts=document.getElementById("timesheetApprovals"), hs=document.getElementById("holidayApprovals");
-  ts.innerHTML=submissions.length?submissions.map(s=>`<div class="job"><div class="bar"><strong>${s.employee} — ${formatWeekEndingLabel(s.date)||s.date}</strong><span class="pill ${s.status.toLowerCase()}">${s.status}</span></div><p class="muted small">A ${round2(s.totals.a)} / B ${round2(s.totals.b)} / C ${round2(s.totals.c)} / Travel ${round2(s.totals.travel)} / Away ${round2(s.totals.away)}</p><div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button></div></div>`).join(""):"<p class='muted'>No timesheets submitted.</p>";
-  hs.innerHTML=holidayRequests.length?holidayRequests.map(h=>`<div class="job"><div class="bar"><strong>${h.employee} — ${h.days} days</strong><span class="pill ${h.status.toLowerCase()}">${h.status}</span></div><p class="muted small">${formatDateShort(h.from)} to ${formatDateShort(h.to)} — ${h.notes||"No notes"}</p><div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btnGreen" onclick="setStatus('holiday','${h.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('holiday','${h.id}','Rejected')">Reject</button>${currentUser?.role==="admin"?`<button class="btnRed" onclick="deleteHolidayRequest('${h.id}')">Delete</button>`:""}</div></div>`).join(""):"<p class='muted'>No holiday requests.</p>";
+  ts.innerHTML=submissions.length?submissions.map(s=>`
+    <div class="job">
+      <div class="bar">
+        <strong>${s.employee} — ${formatWeekEndingLabel(s.date)||s.date}</strong>
+        <span class="pill ${s.status.toLowerCase()}">${s.status}</span>
+      </div>
+      <p class="muted small" style="margin-top:6px">
+        Weekly totals: A ${round2(s.totals.a)} / B ${round2(s.totals.b)} / C ${round2(s.totals.c)} / Travel ${round2(s.totals.travel)} / Away ${round2(s.totals.away)}
+      </p>
+      ${timesheetJobSummaryHtml(s)}
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button>
+        <button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button>
+      </div>
+    </div>
+  `).join(""):"<p class='muted'>No timesheets submitted.</p>";
+
+  hs.innerHTML=holidayRequests.length?holidayRequests.map(h=>`
+    <div class="job">
+      <div class="bar">
+        <strong>${h.employee} — ${h.days} days</strong>
+        <span class="pill ${h.status.toLowerCase()}">${h.status}</span>
+      </div>
+      <p class="muted small">${formatDateShort(h.from)} to ${formatDateShort(h.to)} — ${h.notes||"No notes"}</p>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button class="btnGreen" onclick="setStatus('holiday','${h.id}','Approved')">Approve</button>
+        <button class="btnRed" onclick="setStatus('holiday','${h.id}','Rejected')">Reject</button>
+        ${currentUser?.role==="admin"?`<button class="btnRed" onclick="deleteHolidayRequest('${h.id}')">Delete</button>`:""}
+      </div>
+    </div>
+  `).join(""):"<p class='muted'>No holiday requests.</p>";
 }
 
 function pendingApprovalCount() { return submissions.filter(s=>s.status==="Pending").length + holidayRequests.filter(h=>h.status==="Pending").length; }
