@@ -882,6 +882,73 @@ function renderApprovals() {
   ts.innerHTML=submissions.length?submissions.map(s=>`<div class="job"><div class="bar"><strong>${s.employee} — ${s.date}</strong><span class="pill ${s.status.toLowerCase()}">${s.status}</span></div><p class="muted small">A ${round2(s.totals.a)} / B ${round2(s.totals.b)} / C ${round2(s.totals.c)} / Travel ${round2(s.totals.travel)} / Away ${round2(s.totals.away)}</p><div style="display:flex;gap:8px;margin-top:8px"><button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button></div></div>`).join(""):"<p class='muted'>No timesheets submitted.</p>";
   hs.innerHTML=holidayRequests.length?holidayRequests.map(h=>`<div class="job"><div class="bar"><strong>${h.employee} — ${h.days} days</strong><span class="pill ${h.status.toLowerCase()}">${h.status}</span></div><p class="muted small">${h.from} to ${h.to} — ${h.notes||"No notes"}</p><div style="display:flex;gap:8px;margin-top:8px"><button class="btnGreen" onclick="setStatus('holiday','${h.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('holiday','${h.id}','Rejected')">Reject</button></div></div>`).join(""):"<p class='muted'>No holiday requests.</p>";
 }
+
+function formatDateShort(dateString) {
+  if (!dateString) return "";
+  const d = new Date(dateString + "T12:00:00");
+  return d.toLocaleDateString("en-GB", { weekday:"short", day:"2-digit", month:"short", year:"numeric" });
+}
+
+function workingDatesInclusive(fromDate, toDate) {
+  if (!fromDate || !toDate) return [];
+  const start = new Date(fromDate + "T12:00:00");
+  const end = new Date(toDate + "T12:00:00");
+  if (end < start) return [];
+
+  const dates = [];
+  const current = new Date(start);
+  while (current <= end) {
+    const day = current.getDay();
+    if (day >= 1 && day <= 5) {
+      dates.push(current.toISOString().slice(0,10));
+    }
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+}
+
+function holidayDateItemsForEmployee(employeeName) {
+  const items = [];
+
+  holidayRequests
+    .filter(h => h.employee === employeeName && h.status !== "Rejected")
+    .forEach(h => {
+      const dates = workingDatesInclusive(h.from, h.to);
+      items.push({
+        source: "Holiday Request",
+        from: h.from,
+        to: h.to,
+        days: num(h.days || dates.length),
+        status: h.status || "Pending",
+        notes: h.notes || "",
+        dates
+      });
+    });
+
+  submissions
+    .filter(s => s.employee === employeeName && s.status === "Approved")
+    .forEach(s => {
+      const approvedRequestExists = approvedHolidayRequestExists(employeeName, s.date);
+      if (approvedRequestExists) return;
+
+      const holidayJobs = (s.jobs || []).filter(j => j.site === "Holiday");
+      if (!holidayJobs.length) return;
+
+      const holidayHours = holidayJobs.reduce((a,j) => a + num(j.holidayHours || j.a || 0), 0);
+      items.push({
+        source: "Timesheet Holiday",
+        from: s.date,
+        to: s.date,
+        days: holidayHours / 8,
+        status: "Approved",
+        notes: "Entered directly on timesheet",
+        dates: [s.date]
+      });
+    });
+
+  return items.sort((a,b) => String(a.from).localeCompare(String(b.from)));
+}
+
 function renderHolidayBalances() {
   const balances = staff.map(name => {
     const requestUsed = holidayRequests
@@ -900,16 +967,64 @@ function renderHolidayBalances() {
       }, 0);
 
     const used = requestUsed + timesheetHolidayUsed;
-    return {name, used, requestUsed, timesheetHolidayUsed, left:20-used};
+    return {
+      name,
+      used,
+      requestUsed,
+      timesheetHolidayUsed,
+      left: 20 - used,
+      items: holidayDateItemsForEmployee(name)
+    };
   });
 
   const visibleBalances = currentUser?.role === "admin"
     ? balances
     : balances.filter(b => b.name === currentUser?.name);
 
-  document.getElementById("holidayBalances").innerHTML = visibleBalances.map(b =>
-    `<div class="job"><div class="bar"><strong>${b.name}</strong><strong>${round2(b.left)} left</strong></div><p class="muted small">${round2(b.used)} used/booked from 20. Includes ${round2(b.timesheetHolidayUsed)} day(s) from approved holiday timesheets.</p></div>`
-  ).join("");
+  document.getElementById("holidayBalances").innerHTML = visibleBalances.map(b => {
+    const holidayRows = b.items.length ? `
+      <div style="margin-top:12px;border:1px solid var(--border);border-radius:16px;overflow:hidden">
+        <table>
+          <thead>
+            <tr>
+              <th>Holiday Dates</th>
+              <th>Days</th>
+              <th>Status</th>
+              <th>Source</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${b.items.map(item => `
+              <tr>
+                <td>
+                  <strong>${formatDateShort(item.from)}${item.to && item.to !== item.from ? " → " + formatDateShort(item.to) : ""}</strong>
+                  <div class="small muted">${item.dates.map(formatDateShort).join(", ")}</div>
+                </td>
+                <td>${round2(item.days)}</td>
+                <td><span class="pill ${String(item.status || "pending").toLowerCase()}">${item.status}</span></td>
+                <td>${item.source}</td>
+                <td>${item.notes || ""}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    ` : `<p class="muted small" style="margin-top:10px">No holiday dates recorded yet.</p>`;
+
+    return `
+      <div class="job" style="border-top:1px solid var(--border)">
+        <div class="bar">
+          <div>
+            <strong>${b.name}</strong>
+            <p class="small muted">${round2(b.used)} used/booked from 20. Holiday requests: ${round2(b.requestUsed)} day(s). Timesheet holidays: ${round2(b.timesheetHolidayUsed)} day(s).</p>
+          </div>
+          <strong style="font-size:22px;color:${b.left < 0 ? "var(--red)" : "var(--green)"}">${round2(b.left)} left</strong>
+        </div>
+        ${holidayRows}
+      </div>
+    `;
+  }).join("");
 
   const mine = balances.find(b => b.name === (currentUser?.role === "employee" ? currentUser.name : document.getElementById("holidayEmployee")?.value)) || balances[0];
   if(mine) document.getElementById("kpiHoliday").textContent = round2(mine.left);
