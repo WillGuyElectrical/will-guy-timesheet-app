@@ -60,6 +60,9 @@ th { color:var(--muted); font-size:12px; }
 .okCard { border-left:6px solid var(--green); }
 .bigStatus { font-size:18px; font-weight:900; }
 .tableWrap { overflow:auto; }
+.approvalEmployeeGroup { border:1px solid var(--border); border-radius:18px; margin-top:12px; overflow:hidden; background:#fff; }
+.approvalEmployeeHead { background:#eef7fc; padding:12px; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; }
+.inlineEditor { margin-top:12px; border:2px solid var(--blue); border-radius:18px; padding:12px; background:#f8fcff; }
 @media print {
   body { background:white; color:#102033; }
   .top,.tabs,button,#dashboard,#timesheet,#holiday,#approvals,#settings,#updates,#incomplete,#backup { display:none!important; }
@@ -68,72 +71,6 @@ th { color:var(--muted); font-size:12px; }
   .card { box-shadow:none; border:1px solid #dbe5ef; break-inside:avoid; }
   table { font-size:11px; }
 }
-
-/* APPROVALS WEEK FILTER + EDIT MODAL */
-.approvalFilterBox{
-  background:#eef7ff;
-  border:1px solid #bfdbfe;
-  color:#075985;
-  padding:14px;
-  border-radius:16px;
-  margin-bottom:14px;
-}
-.editModalOverlay{
-  position:fixed;
-  inset:0;
-  background:rgba(15,23,42,.62);
-  z-index:9999;
-  display:flex;
-  align-items:flex-start;
-  justify-content:center;
-  padding:18px;
-  overflow:auto;
-}
-.editModalCard{
-  width:100%;
-  max-width:980px;
-  background:#fff;
-  border-radius:24px;
-  padding:18px;
-  box-shadow:0 30px 80px rgba(0,0,0,.35);
-}
-.editModalHead{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  gap:12px;
-  margin-bottom:12px;
-}
-.editModalActions{
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
-  margin-top:14px;
-}
-.inlineEditBtn{
-  padding:8px 10px;
-  font-size:13px;
-}
-
-
-/* FULL TIMESHEET INLINE EDIT MODAL */
-.fullEditTable input,
-.fullEditTable select{
-  min-width:90px;
-  font-size:14px;
-  padding:8px;
-}
-.fullEditTable .siteInput{
-  min-width:180px;
-}
-.fullEditTable .descInput{
-  min-width:220px;
-}
-.fullEditTable th,
-.fullEditTable td{
-  padding:8px;
-}
-
 </style>
 </head>
 <body>
@@ -248,11 +185,9 @@ th { color:var(--muted); font-size:12px; }
 
   <section id="approvals" class="hidden">
     <div class="card">
-      <h2>Timesheet Approvals</h2>
-      <p class="muted small">Select a week ending to view employee approvals for that week. Edit buttons now open a proper editable line form.</p>
-      <div class="approvalFilterBox">
-        <label>Week Ending Sunday</label>
-        <select id="approvalWeekEndingSelect" onchange="renderApprovals()"></select>
+      <div class="bar"><div><h2>Timesheet Approvals</h2><p class="muted small">Choose a week ending, then approve or edit employee timesheets for that week.</p></div></div>
+      <div class="grid grid2" style="margin-top:12px">
+        <div><label>Week Ending</label><select id="approvalWeekEnding" onchange="setApprovalWeekEnding(this.value)"></select></div>
       </div>
       <div id="timesheetApprovals"></div>
     </div>
@@ -291,7 +226,7 @@ const workingAwayAllowanceRate = 1;
 const staff = users.filter(u=>u.role==="employee").map(u=>u.name);
 const days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const sites = ["Long Sutton","McCormick's","Mizkan","Team","Ashco","Kensal","Holiday","Bank Holiday","Manual"];
-let currentUser = null, jobs = [], submissions = [], holidayRequests = [];
+let currentUser = null, jobs = [], submissions = [], holidayRequests = [], approvalWeekEndingFilter = "", editingSubmittedTimesheetId = null;
 
 const bankHolidaysEnglandWales = [
   {date:"2026-01-01", title:"New Year's Day"},
@@ -569,6 +504,57 @@ function renderHolidayBalances() {
 
 function submittedJobSite(job) { return job.finalSite||job.manualSite||job.site||""; }
 function submittedJobHours(job) { const a=num(job.a), b=num(job.b), c=num(job.c), travel=num(job.travel), away=num(job.away); return {a,b,c,travel,away,total:round2(a+b+c+travel+away)}; }
+
+function esc(value) { return String(value ?? "").replace(/[&<>"]/g, ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch])); }
+function setApprovalWeekEnding(value) { approvalWeekEndingFilter=value||""; editingSubmittedTimesheetId=null; renderApprovals(); }
+function approvalWeekOptions() { return [...new Set(submissions.map(s=>s.date).filter(Boolean))].sort((a,b)=>String(b).localeCompare(String(a))); }
+function refreshApprovalWeekSelector() {
+  const sel=document.getElementById("approvalWeekEnding"); if(!sel) return;
+  const options=approvalWeekOptions();
+  if(!options.length) { sel.innerHTML='<option value="">No submitted weeks</option>'; approvalWeekEndingFilter=""; return; }
+  if(!approvalWeekEndingFilter || !options.includes(approvalWeekEndingFilter)) approvalWeekEndingFilter=options[0];
+  sel.innerHTML=options.map(d=>`<option value="${d}" ${d===approvalWeekEndingFilter?"selected":""}>${formatWeekEndingLabel(d)}</option>`).join("");
+}
+function approvalSummaryForEmployee(items) { const pending=items.filter(x=>x.status==="Pending").length; return `${items.length} timesheet${items.length===1?"":"s"}${pending?` — ${pending} pending`:""}`; }
+function siteOptionsForSubmittedJob(timesheet,job) {
+  let options=(job.day==="Saturday"||job.day==="Sunday") ? sites.filter(s=>s!=="Holiday"&&s!=="Bank Holiday") : sites;
+  const date=dateForTimesheetDay(timesheet.date,job.day);
+  if(isBankHolidayDate(date)) options=options.filter(s=>s!=="Holiday");
+  return options;
+}
+function submittedJobEditorHtml(timesheet,job,index) {
+  const siteOptions=siteOptionsForSubmittedJob(timesheet,job);
+  const manualSiteHtml=job.site==="Manual"?`<div><label>Enter Site Location</label><input value="${esc(job.manualSite||job.finalSite||"")}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'manualSite',this.value)" placeholder="e.g. Coca-Cola"></div>`:"";
+  const addressHtml=(job.site==="Ashco"||job.site==="Kensal")?`<div><label>${esc(job.site)} Site Address</label><input value="${esc(job.siteAddress||"")}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'siteAddress',this.value)" placeholder="Enter site address"></div>`:"";
+  return `<div class="job">\n    <div class="jobTitle"><strong>Line ${index+1} — ${esc(job.day||"")}</strong><button class="btnRed" onclick="deleteSubmittedJobLine('${timesheet.id}',${index})">Remove line</button></div>\n    <div class="grid grid4">\n      <div><label>Job No.</label><input value="${esc(job.jobNo||"")}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'jobNo',this.value)" placeholder="Job no."></div>\n      <div><label>Site / Holiday</label><select onchange="updateSubmittedSite('${timesheet.id}',${index},this.value)"><option value="">Select site</option>${siteOptions.map(site=>`<option value="${esc(site)}" ${job.site===site?"selected":""}>${esc(site)}</option>`).join("")}</select></div>\n      ${manualSiteHtml}${addressHtml}\n      <div><label>Description</label><input value="${esc(job.description||"")}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'description',this.value)" placeholder="Works done"></div>\n      <div><label>Move to day</label><select onchange="updateSubmittedJobField('${timesheet.id}',${index},'day',this.value)">${days.map(d=>`<option ${job.day===d?"selected":""}>${d}</option>`).join("")}</select></div>\n      <div><label>Site Start</label><select onchange="updateSubmittedJobField('${timesheet.id}',${index},'start',this.value)">${optionList(siteStartOptions,job.start)}</select></div>\n      <div><label>Site Finish</label><select onchange="updateSubmittedJobField('${timesheet.id}',${index},'finish',this.value)">${optionList(siteFinishOptions,job.finish)}</select></div>\n      <div><label>A Normal</label><input type="number" step="0.25" value="${esc(job.a||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'a',this.value,true)"></div>\n      <div><label>B 1.5x</label><input type="number" step="0.25" value="${esc(job.b||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'b',this.value,true)"></div>\n      <div><label>C Double</label><input type="number" step="0.25" value="${esc(job.c||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'c',this.value,true)"></div>\n      <div><label>Travel</label><input type="text" inputmode="decimal" value="${esc(job.travel||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'travel',this.value,true)" placeholder="0"></div>\n      <div><label>Working Away</label><input type="text" inputmode="decimal" value="${esc(job.away||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'away',this.value,true)" placeholder="0"></div>\n    </div>\n  </div>`;
+}
+function submittedTimesheetEditorHtml(timesheet) {
+  return `<div class="inlineEditor">\n    <div class="bar"><div><h3>Edit submitted hours</h3><p class="muted small">Change site, start/finish, job details and hours. Press Save Changes when finished.</p></div><button class="btn2" onclick="closeSubmittedTimesheetEditor()">Close</button></div>\n    ${(timesheet.jobs||[]).map((job,index)=>submittedJobEditorHtml(timesheet,job,index)).join("")}\n    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn2" onclick="addSubmittedJobLine('${timesheet.id}')">Add line</button><button class="btn" onclick="saveSubmittedTimesheetEdit('${timesheet.id}')">Save Changes</button></div>\n  </div>`;
+}
+function openSubmittedTimesheetEditor(timesheetId) { editingSubmittedTimesheetId=String(timesheetId); renderApprovals(); }
+function closeSubmittedTimesheetEditor() { editingSubmittedTimesheetId=null; renderApprovals(); }
+function updateSubmittedJobField(timesheetId,index,field,value,isNumber=false) {
+  const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!timesheet.jobs[index]) return;
+  timesheet.jobs[index][field]=isNumber?num(value):value;
+  if(isNumber) recalcSubmittedTimesheetTotals(timesheet);
+}
+function updateSubmittedSite(timesheetId,index,value) {
+  const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!timesheet.jobs[index]) return;
+  const job=timesheet.jobs[index]; const jobDate=dateForTimesheetDay(timesheet.date,job.day);
+  if(value==="Holiday" && isBankHolidayDate(jobDate)) { alert("Holiday cannot be booked on a bank holiday. Bank holidays are paid separately as Bank Holiday."); renderApprovals(); return; }
+  job.site=value; if(value!=="Manual") job.manualSite=""; if(value!=="Ashco"&&value!=="Kensal") job.siteAddress="";
+  if(value==="Holiday") { job.description="Holiday pay"; job.start=""; job.finish=""; job.a=8; job.b=0; job.c=0; job.travel=0; job.away=0; job.holidayHours=8; job.manual=true; }
+  if(value==="Bank Holiday") { job.description="Bank holiday pay"; job.start=""; job.finish=""; job.a=8; job.b=0; job.c=0; job.travel=0; job.away=0; job.holidayHours=0; job.manual=true; }
+  job.finalSite=getSiteName(job); recalcSubmittedTimesheetTotals(timesheet); renderApprovals();
+}
+function addSubmittedJobLine(timesheetId) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet) return; if(!Array.isArray(timesheet.jobs)) timesheet.jobs=[]; timesheet.jobs.push({...newJob("Monday"), manual:true}); recalcSubmittedTimesheetTotals(timesheet); renderApprovals(); }
+function deleteSubmittedJobLine(timesheetId,index) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs) return; if(!confirm("Remove this line from the submitted timesheet?")) return; timesheet.jobs.splice(index,1); recalcSubmittedTimesheetTotals(timesheet); renderApprovals(); }
+async function saveSubmittedTimesheetEdit(timesheetId) {
+  const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet) return;
+  (timesheet.jobs||[]).forEach(j=>{ j.finalSite=getSiteName(j); }); recalcSubmittedTimesheetTotals(timesheet);
+  try{ await updateTimesheetInSupabase(timesheet); editingSubmittedTimesheetId=null; renderAll(); alert("Timesheet changes saved."); }catch(err){ console.error(err); alert("Could not save timesheet edit to Supabase."); }
+}
+
 function timesheetJobSummaryHtml(timesheet) {
   const grouped={}; (timesheet.jobs||[]).forEach(job=>{ const day=job.day||"Unassigned"; if(!grouped[day]) grouped[day]=[]; grouped[day].push(job); });
   const orderedDays=days.filter(day=>grouped[day]?.length); if(!orderedDays.length) return "<p class='muted small' style='margin-top:8px'>No job lines recorded.</p>";
@@ -585,11 +571,13 @@ async function setStatus(type,id,status) { const list=type==="timesheet"?submiss
 async function deleteHolidayRequest(id) { if(!currentUser||currentUser.role!=="admin")return; if(!confirm("Delete this holiday request? This cannot be undone.")) return; try{ await deleteHolidaySupabase(id); holidayRequests=holidayRequests.filter(h=>String(h.id)!==String(id)); renderAll(); }catch(err){ console.error(err); alert("Could not delete holiday request from Supabase."); } }
 function renderApprovals() {
   const ts=document.getElementById("timesheetApprovals"), hs=document.getElementById("holidayApprovals");
-  ts.innerHTML=submissions.length?approvalSort(submissions).map(s=>`<div class="job"><div class="bar"><strong>${s.employee} — ${formatWeekEndingLabel(s.date)||s.date}</strong><span class="pill ${s.status.toLowerCase()}">${s.status}</span></div><p class="muted small" style="margin-top:6px"><strong class="bigStatus">Weekly totals:</strong> A ${round2(s.totals.a)} / B ${round2(s.totals.b)} / C ${round2(s.totals.c)} / Travel ${round2(s.totals.travel)} / Away ${round2(s.totals.away)}</p>${timesheetJobSummaryHtml(s)}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button><button class="btn2" onclick="manuallyEditTimesheet('${s.id}')">Manual edit lines</button><button class="btn2" onclick="editSubmittedTimesheetTotals('${s.id}')">Edit totals</button><button class="btnRed" onclick="deleteSubmittedTimesheet('${s.id}')">Delete timesheet</button><button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button></div></div>`).join(""):"<p class='muted'>No timesheets submitted.</p>";
-  hs.innerHTML=holidayRequests.length?approvalSort(holidayRequests).map(h=>`<div class="job"><div class="bar"><strong>${h.employee} — ${h.days} days</strong><span class="pill ${h.status.toLowerCase()}">${h.status}</span></div><p class="muted small">${formatDateShort(h.from)} to ${formatDateShort(h.to)} — ${h.notes||"No notes"}</p><div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btnGreen" onclick="setStatus('holiday','${h.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('holiday','${h.id}','Rejected')">Reject</button>${currentUser?.role==="admin"?`<button class="btnRed" onclick="deleteHolidayRequest('${h.id}')">Delete</button>`:""}</div></div>`).join(""):"<p class='muted'>No holiday requests.</p>";
+  refreshApprovalWeekSelector();
+  const weekItems=approvalWeekEndingFilter?submissions.filter(s=>s.date===approvalWeekEndingFilter):submissions;
+  const grouped={}; approvalSort(weekItems).forEach(s=>{ const emp=s.employee||"Unknown employee"; if(!grouped[emp]) grouped[emp]=[]; grouped[emp].push(s); });
+  const employees=Object.keys(grouped).sort((a,b)=>a.localeCompare(b));
+  ts.innerHTML=employees.length?employees.map(emp=>`<div class="approvalEmployeeGroup"><div class="approvalEmployeeHead"><strong>${esc(emp)}</strong><span class="muted small">${approvalSummaryForEmployee(grouped[emp])}</span></div>${grouped[emp].map(s=>`<div class="job"><div class="bar"><strong>Week ending ${formatWeekEndingLabel(s.date)||s.date}</strong><span class="pill ${String(s.status||"Pending").toLowerCase()}">${s.status}</span></div><p class="muted small" style="margin-top:6px"><strong class="bigStatus">Weekly totals:</strong> A ${round2(s.totals?.a)} / B ${round2(s.totals?.b)} / C ${round2(s.totals?.c)} / Travel ${round2(s.totals?.travel)} / Away ${round2(s.totals?.away)}</p>${timesheetJobSummaryHtml(s)}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button><button class="btn2" onclick="openSubmittedTimesheetEditor('${s.id}')">Edit submitted hours</button><button class="btn2" onclick="editSubmittedTimesheetTotals('${s.id}')">Edit totals only</button><button class="btnRed" onclick="deleteSubmittedTimesheet('${s.id}')">Delete timesheet</button><button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button></div>${String(editingSubmittedTimesheetId)===String(s.id)?submittedTimesheetEditorHtml(s):""}</div>`).join("")}</div>`).join(""):`<p class='muted' style='margin-top:12px'>No timesheets submitted for this week ending.</p>`;
+  hs.innerHTML=holidayRequests.length?approvalSort(holidayRequests).map(h=>`<div class="job"><div class="bar"><strong>${h.employee} — ${h.days} days</strong><span class="pill ${h.status.toLowerCase()}">${h.status}</span></div><p class="muted small">${formatDateShort(h.from)} to ${formatDateShort(h.to)} — ${h.notes||"No notes"}</p><div style="display:flex;gap:8px;margin-top:8px"><button class="btnGreen" onclick="setStatus('holiday','${h.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('holiday','${h.id}','Rejected')">Reject</button><button class="btnRed" onclick="deleteHolidayRequest('${h.id}')">Delete</button></div></div>`).join(""):"<p class='muted'>No holiday requests.</p>";
 }
-
-function pendingApprovalCount() { return submissions.filter(s=>s.status==="Pending").length + holidayRequests.filter(h=>h.status==="Pending").length; }
 function updateApprovalBadge() { const count=pendingApprovalCount(), badge=document.getElementById("approvalBadge"), tab=document.getElementById("tabApprovals"); if(!badge||!tab)return; badge.textContent=count; badge.classList.toggle("hidden",count===0); tab.classList.toggle("hasPending",count>0); const dash=document.getElementById("dashboardApprovalCount"); if(dash) dash.textContent=count; }
 function employeeUpdateCount() { if(!currentUser||currentUser.role!=="employee") return 0; return submissions.filter(s=>s.employee===currentUser.name&&(s.status==="Approved"||s.status==="Rejected")).length + holidayRequests.filter(h=>h.employee===currentUser.name&&(h.status==="Approved"||h.status==="Rejected")).length; }
 function updateEmployeeBadge() { const count=employeeUpdateCount(), badge=document.getElementById("employeeBadge"); if(!badge)return; badge.textContent=count; badge.classList.toggle("hidden",count===0); }
@@ -631,129 +619,5 @@ function renderAll() {
   document.getElementById("kpiSubmitted").textContent=submissions.length;
 }
 </script>
-
-<div id="submittedEditModal" class="editModalOverlay hidden">
-  <div class="editModalCard">
-    <div class="editModalHead">
-      <div>
-        <h2>Edit Submitted Timesheet Line</h2>
-        <p class="muted small" id="editSubmittedContext"></p>
-      </div>
-      <button class="btnRed" type="button" onclick="closeSubmittedJobEditor()">Close</button>
-    </div>
-
-    <input type="hidden" id="editSubmittedTimesheetId">
-    <input type="hidden" id="editSubmittedJobIndex">
-
-    <div class="grid grid4">
-      <div>
-        <label>Day</label>
-        <select id="editSubmittedDay"></select>
-      </div>
-      <div>
-        <label>Job No.</label>
-        <input id="editSubmittedJobNo" placeholder="Job no.">
-      </div>
-      <div>
-        <label>Site / Job</label>
-        <select id="editSubmittedSite"></select>
-      </div>
-      <div>
-        <label>Manual Site / Final Site</label>
-        <input id="editSubmittedManualSite" placeholder="Manual site or final site">
-      </div>
-      <div>
-        <label>Site Address</label>
-        <input id="editSubmittedSiteAddress" placeholder="Site address if needed">
-      </div>
-      <div>
-        <label>Site Start</label>
-        <select id="editSubmittedStart"></select>
-      </div>
-      <div>
-        <label>Site Finish</label>
-        <select id="editSubmittedFinish"></select>
-      </div>
-      <div>
-        <label>Description</label>
-        <input id="editSubmittedDescription" placeholder="Works done">
-      </div>
-      <div>
-        <label>A Normal</label>
-        <input id="editSubmittedA" type="number" step="0.25">
-      </div>
-      <div>
-        <label>B 1.5x</label>
-        <input id="editSubmittedB" type="number" step="0.25">
-      </div>
-      <div>
-        <label>C Double</label>
-        <input id="editSubmittedC" type="number" step="0.25">
-      </div>
-      <div>
-        <label>Travel</label>
-        <input id="editSubmittedTravel" type="number" step="0.25">
-      </div>
-      <div>
-        <label>Working Away</label>
-        <input id="editSubmittedAway" type="number" step="0.25">
-      </div>
-    </div>
-
-    <div class="editModalActions">
-      <button class="btn" type="button" onclick="saveSubmittedJobEdit()">Save Line Changes</button>
-      <button class="btn2" type="button" onclick="autoCalculateSubmittedEditHours()">Auto-calculate from start/finish</button>
-      <button class="btnRed" type="button" onclick="closeSubmittedJobEditor()">Cancel</button>
-    </div>
-
-    <p class="muted small" style="margin-top:10px">This edits the submitted line and saves it back to Supabase, then recalculates the weekly totals.</p>
-  </div>
-</div>
-
-
-<div id="fullTimesheetEditModal" class="editModalOverlay hidden">
-  <div class="editModalCard" style="max-width:1280px">
-    <div class="editModalHead">
-      <div>
-        <h2>Edit Timesheet Lines</h2>
-        <p class="muted small" id="fullEditContext"></p>
-      </div>
-      <button class="btnRed" type="button" onclick="closeFullTimesheetEditor()">Close</button>
-    </div>
-
-    <input type="hidden" id="fullEditTimesheetId">
-
-    <div class="tableWrap">
-      <table class="fullEditTable">
-        <thead>
-          <tr>
-            <th>Day</th>
-            <th>Job No.</th>
-            <th>Site / Job</th>
-            <th>Manual Site</th>
-            <th>Start</th>
-            <th>Finish</th>
-            <th>Description</th>
-            <th>A</th>
-            <th>B</th>
-            <th>C</th>
-            <th>Travel</th>
-            <th>Away</th>
-          </tr>
-        </thead>
-        <tbody id="fullEditRows"></tbody>
-      </table>
-    </div>
-
-    <div class="editModalActions">
-      <button class="btn" type="button" onclick="saveFullTimesheetEdit()">Save All Line Changes</button>
-      <button class="btn2" type="button" onclick="autoCalculateAllFullEditRows()">Auto-calculate all rows from start/finish</button>
-      <button class="btnRed" type="button" onclick="closeFullTimesheetEditor()">Cancel</button>
-    </div>
-
-    <p class="muted small" style="margin-top:10px">Edit the actual lines directly, then save. Totals are recalculated automatically.</p>
-  </div>
-</div>
-
 </body>
 </html>
