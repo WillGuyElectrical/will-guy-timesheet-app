@@ -68,6 +68,72 @@ th { color:var(--muted); font-size:12px; }
   .card { box-shadow:none; border:1px solid #dbe5ef; break-inside:avoid; }
   table { font-size:11px; }
 }
+
+/* APPROVALS WEEK FILTER + EDIT MODAL */
+.approvalFilterBox{
+  background:#eef7ff;
+  border:1px solid #bfdbfe;
+  color:#075985;
+  padding:14px;
+  border-radius:16px;
+  margin-bottom:14px;
+}
+.editModalOverlay{
+  position:fixed;
+  inset:0;
+  background:rgba(15,23,42,.62);
+  z-index:9999;
+  display:flex;
+  align-items:flex-start;
+  justify-content:center;
+  padding:18px;
+  overflow:auto;
+}
+.editModalCard{
+  width:100%;
+  max-width:980px;
+  background:#fff;
+  border-radius:24px;
+  padding:18px;
+  box-shadow:0 30px 80px rgba(0,0,0,.35);
+}
+.editModalHead{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+  margin-bottom:12px;
+}
+.editModalActions{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:14px;
+}
+.inlineEditBtn{
+  padding:8px 10px;
+  font-size:13px;
+}
+
+
+/* FULL TIMESHEET INLINE EDIT MODAL */
+.fullEditTable input,
+.fullEditTable select{
+  min-width:90px;
+  font-size:14px;
+  padding:8px;
+}
+.fullEditTable .siteInput{
+  min-width:180px;
+}
+.fullEditTable .descInput{
+  min-width:220px;
+}
+.fullEditTable th,
+.fullEditTable td{
+  padding:8px;
+}
+
 </style>
 </head>
 <body>
@@ -181,7 +247,15 @@ th { color:var(--muted); font-size:12px; }
   </section>
 
   <section id="approvals" class="hidden">
-    <div class="card"><h2>Timesheet Approvals</h2><p class="muted small">Pending items are shown first. Wayne/David can manually edit lines, edit totals, or delete a submitted timesheet.</p><div id="timesheetApprovals"></div></div>
+    <div class="card">
+      <h2>Timesheet Approvals</h2>
+      <p class="muted small">Select a week ending to view employee approvals for that week. Edit buttons now open a proper editable line form.</p>
+      <div class="approvalFilterBox">
+        <label>Week Ending Sunday</label>
+        <select id="approvalWeekEndingSelect" onchange="renderApprovals()"></select>
+      </div>
+      <div id="timesheetApprovals"></div>
+    </div>
     <div class="card"><h2>Holiday Approvals</h2><p class="muted small">Holiday requests awaiting admin approval appear here.</p><div id="holidayApprovals"></div></div>
   </section>
 
@@ -557,5 +631,129 @@ function renderAll() {
   document.getElementById("kpiSubmitted").textContent=submissions.length;
 }
 </script>
+
+<div id="submittedEditModal" class="editModalOverlay hidden">
+  <div class="editModalCard">
+    <div class="editModalHead">
+      <div>
+        <h2>Edit Submitted Timesheet Line</h2>
+        <p class="muted small" id="editSubmittedContext"></p>
+      </div>
+      <button class="btnRed" type="button" onclick="closeSubmittedJobEditor()">Close</button>
+    </div>
+
+    <input type="hidden" id="editSubmittedTimesheetId">
+    <input type="hidden" id="editSubmittedJobIndex">
+
+    <div class="grid grid4">
+      <div>
+        <label>Day</label>
+        <select id="editSubmittedDay"></select>
+      </div>
+      <div>
+        <label>Job No.</label>
+        <input id="editSubmittedJobNo" placeholder="Job no.">
+      </div>
+      <div>
+        <label>Site / Job</label>
+        <select id="editSubmittedSite"></select>
+      </div>
+      <div>
+        <label>Manual Site / Final Site</label>
+        <input id="editSubmittedManualSite" placeholder="Manual site or final site">
+      </div>
+      <div>
+        <label>Site Address</label>
+        <input id="editSubmittedSiteAddress" placeholder="Site address if needed">
+      </div>
+      <div>
+        <label>Site Start</label>
+        <select id="editSubmittedStart"></select>
+      </div>
+      <div>
+        <label>Site Finish</label>
+        <select id="editSubmittedFinish"></select>
+      </div>
+      <div>
+        <label>Description</label>
+        <input id="editSubmittedDescription" placeholder="Works done">
+      </div>
+      <div>
+        <label>A Normal</label>
+        <input id="editSubmittedA" type="number" step="0.25">
+      </div>
+      <div>
+        <label>B 1.5x</label>
+        <input id="editSubmittedB" type="number" step="0.25">
+      </div>
+      <div>
+        <label>C Double</label>
+        <input id="editSubmittedC" type="number" step="0.25">
+      </div>
+      <div>
+        <label>Travel</label>
+        <input id="editSubmittedTravel" type="number" step="0.25">
+      </div>
+      <div>
+        <label>Working Away</label>
+        <input id="editSubmittedAway" type="number" step="0.25">
+      </div>
+    </div>
+
+    <div class="editModalActions">
+      <button class="btn" type="button" onclick="saveSubmittedJobEdit()">Save Line Changes</button>
+      <button class="btn2" type="button" onclick="autoCalculateSubmittedEditHours()">Auto-calculate from start/finish</button>
+      <button class="btnRed" type="button" onclick="closeSubmittedJobEditor()">Cancel</button>
+    </div>
+
+    <p class="muted small" style="margin-top:10px">This edits the submitted line and saves it back to Supabase, then recalculates the weekly totals.</p>
+  </div>
+</div>
+
+
+<div id="fullTimesheetEditModal" class="editModalOverlay hidden">
+  <div class="editModalCard" style="max-width:1280px">
+    <div class="editModalHead">
+      <div>
+        <h2>Edit Timesheet Lines</h2>
+        <p class="muted small" id="fullEditContext"></p>
+      </div>
+      <button class="btnRed" type="button" onclick="closeFullTimesheetEditor()">Close</button>
+    </div>
+
+    <input type="hidden" id="fullEditTimesheetId">
+
+    <div class="tableWrap">
+      <table class="fullEditTable">
+        <thead>
+          <tr>
+            <th>Day</th>
+            <th>Job No.</th>
+            <th>Site / Job</th>
+            <th>Manual Site</th>
+            <th>Start</th>
+            <th>Finish</th>
+            <th>Description</th>
+            <th>A</th>
+            <th>B</th>
+            <th>C</th>
+            <th>Travel</th>
+            <th>Away</th>
+          </tr>
+        </thead>
+        <tbody id="fullEditRows"></tbody>
+      </table>
+    </div>
+
+    <div class="editModalActions">
+      <button class="btn" type="button" onclick="saveFullTimesheetEdit()">Save All Line Changes</button>
+      <button class="btn2" type="button" onclick="autoCalculateAllFullEditRows()">Auto-calculate all rows from start/finish</button>
+      <button class="btnRed" type="button" onclick="closeFullTimesheetEditor()">Cancel</button>
+    </div>
+
+    <p class="muted small" style="margin-top:10px">Edit the actual lines directly, then save. Totals are recalculated automatically.</p>
+  </div>
+</div>
+
 </body>
 </html>
