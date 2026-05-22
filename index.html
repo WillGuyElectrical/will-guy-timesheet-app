@@ -71,6 +71,18 @@ th { color:var(--muted); font-size:12px; }
   .card { box-shadow:none; border:1px solid #dbe5ef; break-inside:avoid; }
   table { font-size:11px; }
 }
+
+/* LIVE JOB DROPDOWN LINK */
+.liveJobHelp{
+  background:#eef7ff;
+  border:1px solid #bfdbfe;
+  color:#075985;
+  padding:10px;
+  border-radius:14px;
+  margin-top:8px;
+  font-size:13px;
+}
+
 </style>
 </head>
 <body>
@@ -124,7 +136,15 @@ th { color:var(--muted); font-size:12px; }
     <div class="card"><h2>Quick Actions</h2><div class="grid grid2"><button class="btn" onclick="showTab('timesheet')">Open Timesheet</button><button class="btn2" onclick="showTab('holiday')">Request Holiday</button></div></div>
   </section>
 
-  <section id="timesheet" class="hidden">
+  
+<div class="card" id="liveJobsPanel">
+  <h2>Live Jobs</h2>
+  <p class="muted small">Jobs accepted in the WGE Job Schedule will appear here for timesheet selection.</p>
+  <button class="btn2" type="button" onclick="loadLiveJobsFromSupabase()">Refresh Live Jobs</button>
+  <div id="liveJobsList" class="liveJobHelp">Live jobs load from Supabase table <strong>wge_live_jobs</strong>.</div>
+</div>
+
+<section id="timesheet" class="hidden">
     <div class="card">
       <h2>Timesheet</h2>
       <p class="muted small">Monday to Sunday sections are below. Add extra jobs under the correct day. Lunch is deducted once per day from the job covering 12:00–13:00.</p>
