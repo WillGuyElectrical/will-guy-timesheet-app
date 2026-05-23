@@ -83,6 +83,31 @@ th { color:var(--muted); font-size:12px; }
   font-size:13px;
 }
 
+
+/* WGE EMPLOYEE + RATE MANAGEMENT */
+.wgeSettingsBox{
+  background:#f8fafc;
+  border:1px solid var(--border,#dbe5ef);
+  border-radius:18px;
+  padding:14px;
+  margin:14px 0;
+}
+.wgeSettingsGrid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:10px;
+  align-items:end;
+}
+.wgeEmployeeRow{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  align-items:center;
+  padding:9px 0;
+  border-bottom:1px solid #dbe5ef;
+}
+.wgeEmployeeRow:last-child{border-bottom:0}
+
 </style>
 </head>
 <body>
@@ -191,6 +216,51 @@ th { color:var(--muted); font-size:12px; }
   <section id="updates" class="hidden"><div class="card"><h2>My Updates</h2><p class="muted small">Approved or rejected timesheets and holiday requests will show here.</p><div id="employeeUpdates"></div></div></section>
 
   <section id="settings" class="hidden">
+
+<div class="wgeSettingsBox" id="wgeRateEmployeeManager">
+  <h2>Rates & Employees</h2>
+  <p class="muted small">Default rates: A £49.00, B £57.33, C £66.15. Change A Rate or percentage uplift to increase/decrease all three rates by the same percentage.</p>
+
+  <div class="wgeSettingsGrid">
+    <div>
+      <label>A Rate £/hr</label>
+      <input id="wgeRateA" type="number" step="0.01" value="49">
+    </div>
+    <div>
+      <label>B Rate £/hr</label>
+      <input id="wgeRateB" type="number" step="0.01" value="57.33">
+    </div>
+    <div>
+      <label>C Rate £/hr</label>
+      <input id="wgeRateC" type="number" step="0.01" value="66.15">
+    </div>
+    <div>
+      <label>Increase / Decrease %</label>
+      <input id="wgeRatePercent" type="number" step="0.01" value="0">
+    </div>
+    <div>
+      <button class="btn2" type="button" id="wgeApplyRatePercentBtn">Apply % to A/B/C</button>
+    </div>
+    <div>
+      <button class="btn2" type="button" id="wgeResetRatesBtn">Reset Default Rates</button>
+    </div>
+  </div>
+
+  <div style="height:14px"></div>
+
+  <h3>Employees</h3>
+  <div class="wgeSettingsGrid">
+    <div>
+      <label>Employee Name</label>
+      <input id="wgeNewEmployeeName" placeholder="Employee name">
+    </div>
+    <div>
+      <button class="btn" type="button" id="wgeAddEmployeeBtn">Add Employee</button>
+    </div>
+  </div>
+  <div id="wgeEmployeeList" style="margin-top:10px"></div>
+</div>
+
     <div class="card">
       <h2>Change My Password</h2>
       <div class="grid grid2"><div><label>Current Password</label><input id="currentPassword" type="password"></div><div><label>New Password</label><input id="newPassword" type="password"></div></div>
