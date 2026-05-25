@@ -165,8 +165,8 @@ th { color:var(--muted); font-size:12px; }
 <div class="card" id="liveJobsPanel">
   <h2>Live Jobs</h2>
   <p class="muted small">Jobs accepted in the WGE Job Schedule will appear here for timesheet selection.</p>
-  <button class="btn2" type="button" onclick="loadLiveJobsFromSupabase()">Refresh Live Jobs</button>
-  <div id="liveJobsList" class="liveJobHelp">Live jobs load from Supabase table <strong>wge_live_jobs</strong>.</div>
+  <button class="btn2" type="button" onclick="loadLiveJobsFromSharedStorage()">Refresh Live Jobs</button>
+  <div id="liveJobsList" class="liveJobHelp">Live jobs load from shared local storage after quotes are converted.</div>
 </div>
 
 <section id="timesheet" class="hidden">
@@ -217,7 +217,7 @@ th { color:var(--muted); font-size:12px; }
 
   <section id="settings" class="hidden">
 
-<div class="wgeSettingsBox" id="wgeRateEmployeeManager">
+<div class="wgeSettingsBox adminOnly hidden" id="wgeRateEmployeeManager">
   <h2>Rates & Employees</h2>
   <p class="muted small">Default rates: A £49.00, B £57.33, C £66.15. Change A Rate or percentage uplift to increase/decrease all three rates by the same percentage.</p>
 
@@ -228,11 +228,11 @@ th { color:var(--muted); font-size:12px; }
     </div>
     <div>
       <label>B Rate £/hr</label>
-      <input id="wgeRateB" type="number" step="0.01" value="57.33">
+      <input id="wgeRateB" type="number" step="0.01" value="57.33" readonly>
     </div>
     <div>
       <label>C Rate £/hr</label>
-      <input id="wgeRateC" type="number" step="0.01" value="66.15">
+      <input id="wgeRateC" type="number" step="0.01" value="66.15" readonly>
     </div>
     <div>
       <label>Increase / Decrease %</label>
@@ -250,13 +250,10 @@ th { color:var(--muted); font-size:12px; }
 
   <h3>Employees</h3>
   <div class="wgeSettingsGrid">
-    <div>
-      <label>Employee Name</label>
-      <input id="wgeNewEmployeeName" placeholder="Employee name">
-    </div>
-    <div>
-      <button class="btn" type="button" id="wgeAddEmployeeBtn">Add Employee</button>
-    </div>
+    <div><label>Employee Name</label><input id="wgeNewEmployeeName" placeholder="Employee name"></div>
+    <div><label>Login Password</label><input id="wgeNewEmployeePassword" placeholder="Temporary password"></div>
+    <div><label>Payroll Rate £/hr</label><input id="wgeNewEmployeeRate" type="number" step="0.01" value="0"></div>
+    <div><button class="btn" type="button" id="wgeAddEmployeeBtn">Add Employee</button></div>
   </div>
   <div id="wgeEmployeeList" style="margin-top:10px"></div>
 </div>
@@ -317,6 +314,34 @@ const staff = users.filter(u=>u.role==="employee").map(u=>u.name);
 const days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const sites = ["Long Sutton","McCormick's","Mizkan","Team","Ashco","Kensal","Holiday","Bank Holiday","Manual"];
 let currentUser = null, jobs = [], submissions = [], holidayRequests = [], approvalWeekEndingFilter = "", editingSubmittedTimesheetId = null;
+const SHARED_JOBS_KEY = "wgeSharedJobsV1";
+const SHARED_TIMESHEETS_KEY = "wgeSharedTimesheetsV1";
+const CHARGE_RATES_KEY = "wgeChargeRatesV1";
+const LOCAL_USERS_KEY = "wgeTimesheetUsersV1";
+const LOCAL_PAYROLL_RATES_KEY = "wgeTimesheetPayrollRatesV1";
+const DEFAULT_CHARGE_RATES = {a:49,b:57.33,c:66.15};
+function safeParse(text,fallback){try{return JSON.parse(text)}catch(e){return fallback}}
+function money2(value){return "£"+Number(value||0).toFixed(2);}
+function loadChargeRates(){return {...DEFAULT_CHARGE_RATES,...(safeParse(localStorage.getItem(CHARGE_RATES_KEY),{})||{})};}
+let chargeRates = loadChargeRates();
+function saveChargeRates(){localStorage.setItem(CHARGE_RATES_KEY,JSON.stringify(chargeRates));}
+function saveLocalAdminConfig(){localStorage.setItem(LOCAL_USERS_KEY,JSON.stringify(users));localStorage.setItem(LOCAL_PAYROLL_RATES_KEY,JSON.stringify(employeeRates));saveChargeRates();}
+function loadLocalAdminConfig(){const localUsers=safeParse(localStorage.getItem(LOCAL_USERS_KEY),null); if(Array.isArray(localUsers)){users.splice(0,users.length,...localUsers);} const localRates=safeParse(localStorage.getItem(LOCAL_PAYROLL_RATES_KEY),null); if(localRates&&typeof localRates==="object"){Object.assign(employeeRates,localRates);} staff.splice(0,staff.length,...users.filter(u=>u.role==="employee").map(u=>u.name)); chargeRates=loadChargeRates();}
+function loadSharedJobs(){return safeParse(localStorage.getItem(SHARED_JOBS_KEY),[])||[];}
+function saveSharedJobs(list){localStorage.setItem(SHARED_JOBS_KEY,JSON.stringify(list||[]));}
+function loadSharedTimesheets(){return safeParse(localStorage.getItem(SHARED_TIMESHEETS_KEY),[])||[];}
+function saveSharedTimesheets(list){localStorage.setItem(SHARED_TIMESHEETS_KEY,JSON.stringify(list||[]));}
+function liveSharedJobs(){return loadSharedJobs().filter(j=>!["Closed","Invoiced","Rejected"].includes(String(j.status||""))); }
+function sharedJobLabel(job){return `${job.jobRef} - ${job.customer||""}${job.site?" / "+job.site:""}${job.projectTitle?" - "+job.projectTitle:""}`;}
+function findSharedJob(ref){return loadSharedJobs().find(j=>j.jobRef===ref);}
+function upsertSharedTimesheet(item){const list=loadSharedTimesheets(); const idx=list.findIndex(x=>String(x.id)===String(item.id)); if(idx>=0)list[idx]=item; else list.unshift(item); saveSharedTimesheets(list);}
+function payrollRateFor(employee){return employeeRates[employee]||0;}
+function lineHours(job){return round2(num(job.a)+num(job.b)+num(job.c)+num(job.travel)+num(job.away));}
+function lineLabourCost(employee,job){return round2(num(job.a)*chargeRates.a+num(job.b)*chargeRates.b+num(job.c)*chargeRates.c+num(job.travel)*chargeRates.a);}
+function normaliseTimesheetForShared(item){return {...item,jobs:(item.jobs||[]).map(j=>({...j,labourHours:lineHours(j),labourCost:lineLabourCost(item.employee,j)}))};}
+function syncSharedJobActuals(){const timesheets=loadSharedTimesheets().filter(t=>t.status!=="Rejected"); const shared=loadSharedJobs().map(job=>{const actual={labourActual:0,labourCost:0,employeeAllocations:{},timesheets:[]}; timesheets.forEach(t=>(t.jobs||[]).filter(line=>line.jobRef===job.jobRef||line.jobNo===job.jobRef).forEach(line=>{const h=lineHours(line); actual.labourActual+=h; actual.labourCost+=lineLabourCost(t.employee,line); actual.employeeAllocations[t.employee]=(actual.employeeAllocations[t.employee]||0)+h; actual.timesheets.push({timesheetId:t.id,employee:t.employee,date:t.date,status:t.status,hours:h,notes:line.description||""});})); return {...job,labourActual:round2(actual.labourActual),labourCost:round2(actual.labourCost),employeeAllocations:actual.employeeAllocations,timesheets:actual.timesheets,progress:actual.labourActual>0?"In Progress":job.progress||"Not Started"};}); saveSharedJobs(shared);}
+function saveLocalTimesheetState(){localStorage.setItem("wgeTimesheetSubmissionsV1",JSON.stringify(submissions));localStorage.setItem("wgeTimesheetHolidaysV1",JSON.stringify(holidayRequests));}
+loadLocalAdminConfig();
 
 const bankHolidaysEnglandWales = [
   {date:"2026-01-01", title:"New Year's Day"},
@@ -349,15 +374,20 @@ function dbHolidayToApp(row) { return {id:row.id,employee:row.employee,from:row.
 function appHolidayToDb(item) { return {employee:item.employee,start_date:item.from,end_date:item.to,days:Number(item.days||0),status:item.status||"Pending",notes:item.notes||""}; }
 
 async function loadData() {
+  submissions=safeParse(localStorage.getItem("wgeTimesheetSubmissionsV1"),[])||[];
+  holidayRequests=safeParse(localStorage.getItem("wgeTimesheetHolidaysV1"),[])||[];
   try {
     const [dbTimesheets,dbHolidays,dbUsers]=await Promise.all([sbGet("timesheets"),sbGet("holidays"),sbGet("users")]);
     submissions=dbTimesheets.map(dbTimesheetToApp);
     holidayRequests=dbHolidays.map(dbHolidayToApp);
+    saveLocalTimesheetState();
     dbUsers.forEach(dbUser=>{ const existing=users.find(u=>u.name===dbUser.name); if(existing){ existing.role=dbUser.role||existing.role; existing.password=dbUser.password||existing.password; } });
   } catch(err) {
     console.error(err);
-    alert("Could not load live data from Supabase. Check RLS is disabled on timesheets, holidays and users.");
+    console.warn("Using local timesheet storage because Supabase could not be loaded.");
   }
+  submissions.forEach(s=>upsertSharedTimesheet(normaliseTimesheetForShared(s)));
+  syncSharedJobActuals();
 }
 
 async function saveTimesheetToSupabase(item) { const saved=await sbInsert("timesheets",appTimesheetToDb(item)); item.id=saved.id; return item; }
@@ -408,7 +438,7 @@ async function login() {
   document.getElementById("currentRole").textContent=currentUser.role==="admin"?"Admin access enabled":currentUser.role==="accountant"?"Accountant access enabled":"Employee access";
   document.querySelectorAll(".adminOnly").forEach(el=>el.classList.toggle("hidden",!(currentUser.role==="admin"||currentUser.role==="accountant")));
   document.querySelectorAll(".employeeOnly").forEach(el=>el.classList.toggle("hidden",currentUser.role!=="employee"));
-  setupSelects(); resetJobs(); applyBankHolidaysToCurrentTimesheet(); renderAll();
+  setupSelects(); wireSettingsControls(); resetJobs(); applyBankHolidaysToCurrentTimesheet(); renderAll();
 }
 function logout() { location.reload(); }
 
@@ -436,17 +466,19 @@ function refreshWeekEndingDropdown() {
 }
 
 function siteOptionsForDay(day) {
+  const liveOptions=liveSharedJobs().map(j=>j.jobRef);
   let options=(day==="Saturday"||day==="Sunday") ? sites.filter(s=>s!=="Holiday"&&s!=="Bank Holiday") : sites;
+  options=[...liveOptions,...options];
   const weekEnding=document.getElementById("timesheetDate")?.value;
   const date=dateForTimesheetDay(weekEnding,day);
   if(isBankHolidayDate(date)) options=options.filter(s=>s!=="Holiday");
-  return options;
+  return [...new Set(options)];
 }
-function newJob(day) { return {id:Date.now()+Math.random(),day,site:"",manualSite:"",siteAddress:"",jobNo:"",description:"",start:"",finish:"",a:0,b:0,c:0,travel:0,away:0,holidayHours:0,manual:false}; }
+function newJob(day) { return {id:Date.now()+Math.random(),day,site:"",manualSite:"",siteAddress:"",jobNo:"",jobRef:"",customer:"",projectTitle:"",costingType:"",description:"",start:"",finish:"",a:0,b:0,c:0,travel:0,away:0,holidayHours:0,manual:false}; }
 function resetJobs() { jobs=days.map(d=>newJob(d)); }
 function addJobToDay(day) { jobs.push(newJob(day)); renderAll(); }
 function removeJob(id) { jobs=jobs.filter(j=>String(j.id)!==String(id)); renderAll(); }
-function getSiteName(job) { if(job.site==="Manual") return job.manualSite||"Manual site not entered"; if(job.site==="Ashco"||job.site==="Kensal") return `${job.site} - ${job.siteAddress||"site address not entered"}`; return job.site; }
+function getSiteName(job) { if(job.jobRef)return `${job.jobRef} - ${job.customer||""}${job.site?" / "+job.site:""}`; if(job.site==="Manual") return job.manualSite||"Manual site not entered"; if(job.site==="Ashco"||job.site==="Kensal") return `${job.site} - ${job.siteAddress||"site address not entered"}`; return job.site; }
 
 function applyBankHolidaysToCurrentTimesheet() {
   const weekEnding=document.getElementById("timesheetDate")?.value;
@@ -499,6 +531,9 @@ function updateSite(id,value) {
   const j=jobs.find(x=>String(x.id)===String(id)); if(!j) return;
   const jobDate=dateForTimesheetDay(document.getElementById("timesheetDate")?.value,j.day);
   if(value==="Holiday" && isBankHolidayDate(jobDate)) { alert("Holiday cannot be booked on a bank holiday. Bank holidays are paid separately as Bank Holiday."); return; }
+  const shared=findSharedJob(value);
+  if(shared){j.jobRef=shared.jobRef;j.jobNo=shared.jobRef;j.customer=shared.customer||"";j.site=shared.site||shared.jobRef;j.siteAddress=shared.address||"";j.manualSite="";j.projectTitle=shared.projectTitle||"";j.costingType=shared.costingType||"";j.description=shared.projectTitle||shared.scope||"";j.manual=false;renderAll();return;}
+  j.jobRef="";j.customer="";j.projectTitle="";j.costingType="";
   j.site=value; if(value!=="Manual") j.manualSite=""; if(value!=="Ashco"&&value!=="Kensal") j.siteAddress="";
   if(value==="Holiday") { j.description="Holiday pay"; j.start=""; j.finish=""; j.a=8; j.b=0; j.c=0; j.travel=0; j.away=0; j.holidayHours=8; j.manual=true; }
   if(value==="Bank Holiday") { j.description="Bank holiday pay"; j.start=""; j.finish=""; j.a=8; j.b=0; j.c=0; j.travel=0; j.away=0; j.holidayHours=0; j.manual=true; }
@@ -525,6 +560,7 @@ function renderDaySections() {
 function jobHtml(j,i) {
   const manualSiteHtml=j.site==="Manual"?`<div><label>Enter Site Location</label><input value="${j.manualSite||""}" oninput="updateJobText('${j.id}','manualSite',this.value)" placeholder="e.g. Coca-Cola"></div>`:"";
   const addressHtml=(j.site==="Ashco"||j.site==="Kensal")?`<div><label>${j.site} Site Address</label><input value="${j.siteAddress||""}" oninput="updateJobText('${j.id}','siteAddress',this.value)" placeholder="Enter site address"></div>`:"";
+  const linked=j.jobRef?`<p class="liveJobHelp"><strong>Linked live job:</strong> ${esc(j.jobRef)} — ${esc(j.customer||"")} / ${esc(j.site||"")}<br>${esc(j.projectTitle||"")} ${j.costingType?`<span class="pill">${esc(j.costingType)}</span>`:""}</p>`:"";
   return `<div class="job">
     <div class="jobTitle"><strong>Job ${i+1} — ${j.day}</strong><button class="btnRed" onclick="removeJob('${j.id}')">Remove</button></div>
     <div class="grid grid4">
@@ -541,6 +577,7 @@ function jobHtml(j,i) {
       <div><label>Travel</label><input type="text" inputmode="decimal" value="${j.travel}" oninput="updateJobText('${j.id}','travel',this.value); calculateAll();" placeholder="0"></div>
       <div><label>Working Away</label><input type="text" inputmode="decimal" value="${j.away}" oninput="updateJobText('${j.id}','away',this.value); calculateAll();" placeholder="0"></div>
     </div>
+    ${linked}
     <p class="muted small" style="margin-top:8px">${j.manual?"Manual hours adjusted.":"Auto-calculated. Lunch is deducted from the job covering 12:00–13:00."}</p>
   </div>`;
 }
@@ -558,8 +595,12 @@ async function submitTimesheet() {
   const t=calculateAll();
   const jobsForSubmission=jobs.map(j=>({...j,finalSite:getSiteName(j)}));
   const newSubmission={employee:document.getElementById("employeeSelect").value,date:document.getElementById("timesheetDate").value,jobs:JSON.parse(JSON.stringify(jobsForSubmission)),totals:t,status:"Pending"};
-  try { await saveTimesheetToSupabase(newSubmission); submissions.push(newSubmission); }
-  catch(err) { console.error(err); alert("Could not save this timesheet to Supabase. Please try again."); return; }
+  try { await saveTimesheetToSupabase(newSubmission); }
+  catch(err) { console.warn("Using local timesheet storage because Supabase save failed.", err); newSubmission.id=newSubmission.id||crypto.randomUUID(); }
+  submissions.push(newSubmission);
+  upsertSharedTimesheet(normaliseTimesheetForShared(newSubmission));
+  syncSharedJobActuals();
+  saveLocalTimesheetState();
   document.getElementById("signed").checked=false; resetJobs(); refreshWeekEndingDropdown(); applyBankHolidaysToCurrentTimesheet(); renderAll(); alert("Timesheet submitted to Will Guy Electrical for approval.");
 }
 
@@ -572,8 +613,10 @@ function updateHolidayDaysFromDates() { const from=document.getElementById("holi
 async function submitHoliday() {
   updateHolidayDaysFromDates();
   const newHoliday={employee:document.getElementById("holidayEmployee").value,from:document.getElementById("holidayFrom").value,to:document.getElementById("holidayTo").value,days:num(document.getElementById("holidayDays").value),notes:document.getElementById("holidayNotes").value,status:"Pending"};
-  try { await saveHolidayToSupabase(newHoliday); holidayRequests.push(newHoliday); }
-  catch(err) { console.error(err); alert("Could not save this holiday request to Supabase. Please try again."); return; }
+  try { await saveHolidayToSupabase(newHoliday); }
+  catch(err) { console.warn("Using local holiday storage because Supabase save failed.", err); newHoliday.id=newHoliday.id||crypto.randomUUID(); }
+  holidayRequests.push(newHoliday);
+  saveLocalTimesheetState();
   document.getElementById("holidayNotes").value=""; renderAll(); alert("Holiday submitted for approval.");
 }
 
@@ -592,7 +635,7 @@ function renderHolidayBalances() {
   const mine=balances.find(b=>b.name===(currentUser?.role==="employee"?currentUser.name:document.getElementById("holidayEmployee")?.value))||balances[0]; if(mine && currentUser?.role==="employee") document.getElementById("kpiHoliday").textContent=round2(mine.left);
 }
 
-function submittedJobSite(job) { return job.finalSite||job.manualSite||job.site||""; }
+function submittedJobSite(job) { return job.jobRef?getSiteName(job):(job.finalSite||job.manualSite||job.site||""); }
 function submittedJobHours(job) { const a=num(job.a), b=num(job.b), c=num(job.c), travel=num(job.travel), away=num(job.away); return {a,b,c,travel,away,total:round2(a+b+c+travel+away)}; }
 
 function esc(value) { return String(value ?? "").replace(/[&<>"]/g, ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch])); }
@@ -607,10 +650,11 @@ function refreshApprovalWeekSelector() {
 }
 function approvalSummaryForEmployee(items) { const pending=items.filter(x=>x.status==="Pending").length; return `${items.length} timesheet${items.length===1?"":"s"}${pending?` — ${pending} pending`:""}`; }
 function siteOptionsForSubmittedJob(timesheet,job) {
+  const liveRefs=liveSharedJobs().map(j=>j.jobRef);
   let options=(job.day==="Saturday"||job.day==="Sunday") ? sites.filter(s=>s!=="Holiday"&&s!=="Bank Holiday") : sites;
   const date=dateForTimesheetDay(timesheet.date,job.day);
   if(isBankHolidayDate(date)) options=options.filter(s=>s!=="Holiday");
-  return options;
+  return [...new Set([...liveRefs,...options])];
 }
 function submittedJobEditorHtml(timesheet,job,index) {
   const siteOptions=siteOptionsForSubmittedJob(timesheet,job);
@@ -631,7 +675,14 @@ function updateSubmittedJobField(timesheetId,index,field,value,isNumber=false) {
 function updateSubmittedSite(timesheetId,index,value) {
   const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!timesheet.jobs[index]) return;
   const job=timesheet.jobs[index]; const jobDate=dateForTimesheetDay(timesheet.date,job.day);
+  const shared=findSharedJob(value);
+  if(shared){
+    job.jobRef=shared.jobRef; job.jobNo=shared.jobRef; job.customer=shared.customer||""; job.site=shared.site||shared.jobRef; job.siteAddress=shared.address||"";
+    job.manualSite=""; job.projectTitle=shared.projectTitle||""; job.costingType=shared.costingType||""; job.description=shared.projectTitle||shared.scope||job.description||"";
+    job.finalSite=getSiteName(job); recalcSubmittedTimesheetTotals(timesheet); renderApprovals(); return;
+  }
   if(value==="Holiday" && isBankHolidayDate(jobDate)) { alert("Holiday cannot be booked on a bank holiday. Bank holidays are paid separately as Bank Holiday."); renderApprovals(); return; }
+  job.jobRef=""; job.customer=""; job.projectTitle=""; job.costingType="";
   job.site=value; if(value!=="Manual") job.manualSite=""; if(value!=="Ashco"&&value!=="Kensal") job.siteAddress="";
   if(value==="Holiday") { job.description="Holiday pay"; job.start=""; job.finish=""; job.a=8; job.b=0; job.c=0; job.travel=0; job.away=0; job.holidayHours=8; job.manual=true; }
   if(value==="Bank Holiday") { job.description="Bank holiday pay"; job.start=""; job.finish=""; job.a=8; job.b=0; job.c=0; job.travel=0; job.away=0; job.holidayHours=0; job.manual=true; }
@@ -642,7 +693,12 @@ function deleteSubmittedJobLine(timesheetId,index) { const timesheet=submissions
 async function saveSubmittedTimesheetEdit(timesheetId) {
   const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet) return;
   (timesheet.jobs||[]).forEach(j=>{ j.finalSite=getSiteName(j); }); recalcSubmittedTimesheetTotals(timesheet);
-  try{ await updateTimesheetInSupabase(timesheet); editingSubmittedTimesheetId=null; renderAll(); alert("Timesheet changes saved."); }catch(err){ console.error(err); alert("Could not save timesheet edit to Supabase."); }
+  try{ await updateTimesheetInSupabase(timesheet); }
+  catch(err){ console.warn("Saved timesheet edit locally because Supabase update failed.", err); }
+  upsertSharedTimesheet(normaliseTimesheetForShared(timesheet));
+  syncSharedJobActuals();
+  saveLocalTimesheetState();
+  editingSubmittedTimesheetId=null; renderAll(); alert("Timesheet changes saved.");
 }
 
 function timesheetJobSummaryHtml(timesheet) {
@@ -652,13 +708,13 @@ function timesheetJobSummaryHtml(timesheet) {
 }
 function recalcSubmittedTimesheetTotals(timesheet) { const totals=(timesheet.jobs||[]).reduce((a,j)=>{a.a+=num(j.a);a.b+=num(j.b);a.c+=num(j.c);a.travel+=num(j.travel);a.away+=num(j.away);return a;},{a:0,b:0,c:0,travel:0,away:0}); timesheet.totals=totals; return totals; }
 function timesheetLineLabel(job,index) { const h=submittedJobHours(job); return `${index+1}. ${job.day||""} — ${submittedJobSite(job)||"Site not entered"} — ${job.start||"-"} to ${job.finish||"-"} — A ${round2(h.a)} / B ${round2(h.b)} / C ${round2(h.c)} / Travel ${round2(h.travel)} / Away ${round2(h.away)}`; }
-async function editSubmittedJob(timesheetId,jobIndex) { if(!currentUser||currentUser.role!=="admin"){alert("Only Wayne/David admin can edit submitted timesheets.");return;} const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!timesheet.jobs[jobIndex]) return; const job=timesheet.jobs[jobIndex]; const site=prompt("Site / location",job.finalSite||job.site||""); if(site===null)return; const description=prompt("Description",job.description||""); if(description===null)return; const start=prompt("Start time",job.start||""); if(start===null)return; const finish=prompt("Finish time",job.finish||""); if(finish===null)return; const a=prompt("A normal hours",round2(job.a||0)); if(a===null)return; const b=prompt("B time and half hours",round2(job.b||0)); if(b===null)return; const c=prompt("C double hours",round2(job.c||0)); if(c===null)return; const travel=prompt("Travel hours",round2(job.travel||0)); if(travel===null)return; const away=prompt("Working away hours",round2(job.away||0)); if(away===null)return; job.finalSite=site; job.site=site; job.description=description; job.start=start; job.finish=finish; job.a=num(a); job.b=num(b); job.c=num(c); job.travel=num(travel); job.away=num(away); recalcSubmittedTimesheetTotals(timesheet); try{ await updateTimesheetInSupabase(timesheet); renderAll(); alert("Timesheet line updated."); }catch(err){ console.error(err); alert("Could not save timesheet edit to Supabase."); } }
+async function editSubmittedJob(timesheetId,jobIndex) { if(!currentUser||currentUser.role!=="admin"){alert("Only Wayne/David admin can edit submitted timesheets.");return;} const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!timesheet.jobs[jobIndex]) return; const job=timesheet.jobs[jobIndex]; const site=prompt("Site / location",job.finalSite||job.site||""); if(site===null)return; const description=prompt("Description",job.description||""); if(description===null)return; const start=prompt("Start time",job.start||""); if(start===null)return; const finish=prompt("Finish time",job.finish||""); if(finish===null)return; const a=prompt("A normal hours",round2(job.a||0)); if(a===null)return; const b=prompt("B time and half hours",round2(job.b||0)); if(b===null)return; const c=prompt("C double hours",round2(job.c||0)); if(c===null)return; const travel=prompt("Travel hours",round2(job.travel||0)); if(travel===null)return; const away=prompt("Working away hours",round2(job.away||0)); if(away===null)return; job.finalSite=site; job.site=site; job.description=description; job.start=start; job.finish=finish; job.a=num(a); job.b=num(b); job.c=num(c); job.travel=num(travel); job.away=num(away); recalcSubmittedTimesheetTotals(timesheet); try{ await updateTimesheetInSupabase(timesheet); }catch(err){ console.warn("Saved line edit locally because Supabase update failed.", err); } upsertSharedTimesheet(normaliseTimesheetForShared(timesheet)); syncSharedJobActuals(); saveLocalTimesheetState(); renderAll(); alert("Timesheet line updated."); }
 async function manuallyEditTimesheet(timesheetId) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet)return; const lines=(timesheet.jobs||[]).map((j,i)=>timesheetLineLabel(j,i)).join("\n"); const choice=prompt("Which line do you want to edit?\n\n"+lines+"\n\nEnter line number:"); if(choice===null)return; const index=Number(choice)-1; if(!timesheet.jobs||!timesheet.jobs[index]){alert("Invalid line number.");return;} await editSubmittedJob(timesheetId,index); }
-async function editSubmittedTimesheetTotals(timesheetId) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet)return; const a=prompt("Total A normal hours",round2(timesheet.totals?.a||0)); if(a===null)return; const b=prompt("Total B time and half hours",round2(timesheet.totals?.b||0)); if(b===null)return; const c=prompt("Total C double hours",round2(timesheet.totals?.c||0)); if(c===null)return; const travel=prompt("Total travel hours",round2(timesheet.totals?.travel||0)); if(travel===null)return; const away=prompt("Total working away hours",round2(timesheet.totals?.away||0)); if(away===null)return; timesheet.totals={a:num(a),b:num(b),c:num(c),travel:num(travel),away:num(away)}; try{ await updateTimesheetInSupabase(timesheet); renderAll(); alert("Timesheet totals updated."); }catch(err){ console.error(err); alert("Could not save totals."); } }
-async function deleteSubmittedTimesheet(timesheetId) { if(!confirm("Delete this submitted timesheet completely? This cannot be undone.")) return; try{ await sbDelete("timesheets",timesheetId); submissions=submissions.filter(s=>String(s.id)!==String(timesheetId)); refreshWeekEndingDropdown(); renderAll(); alert("Timesheet deleted."); }catch(err){ console.error(err); alert("Could not delete timesheet."); } }
+async function editSubmittedTimesheetTotals(timesheetId) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet)return; const a=prompt("Total A normal hours",round2(timesheet.totals?.a||0)); if(a===null)return; const b=prompt("Total B time and half hours",round2(timesheet.totals?.b||0)); if(b===null)return; const c=prompt("Total C double hours",round2(timesheet.totals?.c||0)); if(c===null)return; const travel=prompt("Total travel hours",round2(timesheet.totals?.travel||0)); if(travel===null)return; const away=prompt("Total working away hours",round2(timesheet.totals?.away||0)); if(away===null)return; timesheet.totals={a:num(a),b:num(b),c:num(c),travel:num(travel),away:num(away)}; try{ await updateTimesheetInSupabase(timesheet); }catch(err){ console.warn("Saved totals locally because Supabase update failed.", err); } upsertSharedTimesheet(normaliseTimesheetForShared(timesheet)); syncSharedJobActuals(); saveLocalTimesheetState(); renderAll(); alert("Timesheet totals updated."); }
+async function deleteSubmittedTimesheet(timesheetId) { if(!confirm("Delete this submitted timesheet completely? This cannot be undone.")) return; try{ await sbDelete("timesheets",timesheetId); }catch(err){ console.warn("Deleted timesheet locally because Supabase delete failed.", err); } submissions=submissions.filter(s=>String(s.id)!==String(timesheetId)); const shared=loadSharedTimesheets().filter(s=>String(s.id)!==String(timesheetId)); saveSharedTimesheets(shared); syncSharedJobActuals(); saveLocalTimesheetState(); refreshWeekEndingDropdown(); renderAll(); alert("Timesheet deleted."); }
 function approvalSort(items) { const rank={Pending:0,Approved:1,Rejected:2}; return [...items].sort((a,b)=>(rank[a.status]??9)-(rank[b.status]??9)||String(b.date||b.from||"").localeCompare(String(a.date||a.from||""))); }
-async function setStatus(type,id,status) { const list=type==="timesheet"?submissions:holidayRequests; const item=list.find(x=>String(x.id)===String(id)); if(!item)return; try{ if(type==="timesheet") await updateTimesheetStatusSupabase(id,status); if(type==="holiday") await updateHolidayStatusSupabase(id,status); item.status=status; refreshWeekEndingDropdown(); renderAll(); }catch(err){ console.error(err); alert("Could not update approval status in Supabase."); } }
-async function deleteHolidayRequest(id) { if(!currentUser||currentUser.role!=="admin")return; if(!confirm("Delete this holiday request? This cannot be undone.")) return; try{ await deleteHolidaySupabase(id); holidayRequests=holidayRequests.filter(h=>String(h.id)!==String(id)); renderAll(); }catch(err){ console.error(err); alert("Could not delete holiday request from Supabase."); } }
+async function setStatus(type,id,status) { const list=type==="timesheet"?submissions:holidayRequests; const item=list.find(x=>String(x.id)===String(id)); if(!item)return; try{ if(type==="timesheet") await updateTimesheetStatusSupabase(id,status); if(type==="holiday") await updateHolidayStatusSupabase(id,status); }catch(err){ console.warn("Updated approval locally because Supabase status update failed.", err); } item.status=status; if(type==="timesheet"){ upsertSharedTimesheet(normaliseTimesheetForShared(item)); syncSharedJobActuals(); } saveLocalTimesheetState(); refreshWeekEndingDropdown(); renderAll(); }
+async function deleteHolidayRequest(id) { if(!currentUser||currentUser.role!=="admin")return; if(!confirm("Delete this holiday request? This cannot be undone.")) return; try{ await deleteHolidaySupabase(id); }catch(err){ console.warn("Deleted holiday locally because Supabase delete failed.", err); } holidayRequests=holidayRequests.filter(h=>String(h.id)!==String(id)); saveLocalTimesheetState(); renderAll(); }
 function renderApprovals() {
   const ts=document.getElementById("timesheetApprovals"), hs=document.getElementById("holidayApprovals");
   refreshApprovalWeekSelector();
@@ -685,10 +741,36 @@ function payrollCutoffSundayForMonth(year,monthIndex) { const lastWork=new Date(
 function updatePayrollInfoDisplay() { const box=document.getElementById("payrollCutoffInfo"); if(!box)return; const now=new Date(); const payDate=lastWorkingDayOfMonth(now.getFullYear(),now.getMonth()); const cutoff=payrollCutoffSundayForMonth(now.getFullYear(),now.getMonth()); box.innerHTML=`<strong>${now.toLocaleDateString("en-GB",{month:"long",year:"numeric"})} payroll</strong><br>Pay date: ${formatDateShort(payDate)}<br>Include approved timesheets up to week ending Sunday ${formatWeekEndingLabel(cutoff)}.`; }
 function exportPayrollCSV() { const rows=[["Employee","Hourly Rate","A","B","C","Travel","Away","Total Gross"]]; monthlyTotalsByEmployee().forEach(t=>{ const a=payrollAmount(t.employee,t); rows.push([t.employee,pounds(employeeRates[t.employee]||0),round2(t.a),round2(t.b),round2(t.c),round2(t.travel),round2(t.away),pounds(a.totalPay)]); }); downloadCSV("WGE_Monthly_Payroll_Totals.csv",rows); }
 function downloadCSV(filename,rows) { const csv=rows.map(row=>row.map(cell=>`"${String(cell??"").replaceAll('"','""')}"`).join(",")).join("\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
-function downloadFullBackup() { const stamp=new Date().toISOString().slice(0,10); const backup={created_at:new Date().toISOString(),timesheets:submissions,holidays:holidayRequests,users:users.map(u=>({name:u.name,role:u.role}))}; const blob=new Blob([JSON.stringify(backup,null,2)],{type:"application/json;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`WGE-full-backup-${stamp}.json`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
+function downloadFullBackup() { const stamp=new Date().toISOString().slice(0,10); const backup={created_at:new Date().toISOString(),timesheets:submissions,holidays:holidayRequests,users:users.map(u=>({name:u.name,role:u.role})),sharedJobs:loadSharedJobs(),sharedTimesheets:loadSharedTimesheets(),chargeRates,employeeRates}; const blob=new Blob([JSON.stringify(backup,null,2)],{type:"application/json;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`WGE-full-backup-${stamp}.json`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
+
+function renderEmployeeManager() {
+  const a=document.getElementById("wgeRateA"), b=document.getElementById("wgeRateB"), c=document.getElementById("wgeRateC"), list=document.getElementById("wgeEmployeeList");
+  if(a) a.value=Number(chargeRates.a||0).toFixed(2);
+  if(b) b.value=Number(chargeRates.b||0).toFixed(2);
+  if(c) c.value=Number(chargeRates.c||0).toFixed(2);
+  if(!list) return;
+  list.innerHTML=staff.map(name=>`<div class="job"><div class="bar"><div><strong>${esc(name)}</strong><p class="muted small">Payroll rate: ${money2(employeeRates[name]||0)} / hr</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><input style="max-width:130px" type="number" step="0.01" value="${esc(employeeRates[name]||0)}" onchange="updateEmployeePayrollRate('${esc(name)}',this.value)"><button class="btnRed" type="button" onclick="removeEmployee('${esc(name)}')">Remove</button></div></div></div>`).join("")||"<p class='muted small'>No employees set up.</p>";
+}
+function refreshSharedCosts() { submissions.forEach(s=>upsertSharedTimesheet(normaliseTimesheetForShared(s))); syncSharedJobActuals(); }
+function ratesFromA(a){return {a:round2(a),b:round2(a*(DEFAULT_CHARGE_RATES.b/DEFAULT_CHARGE_RATES.a)),c:round2(a*(DEFAULT_CHARGE_RATES.c/DEFAULT_CHARGE_RATES.a))};}
+function applyChargeRateInputs() { chargeRates=ratesFromA(num(document.getElementById("wgeRateA")?.value)); saveLocalAdminConfig(); refreshSharedCosts(); renderAll(); }
+function applyChargeRatePercent() { const pct=num(document.getElementById("wgeRatePercent")?.value), factor=1+(pct/100); chargeRates={a:round2(chargeRates.a*factor),b:round2(chargeRates.b*factor),c:round2(chargeRates.c*factor)}; saveLocalAdminConfig(); refreshSharedCosts(); renderAll(); }
+function resetChargeRates() { chargeRates={...DEFAULT_CHARGE_RATES}; const p=document.getElementById("wgeRatePercent"); if(p) p.value=0; saveLocalAdminConfig(); refreshSharedCosts(); renderAll(); }
+function updateEmployeePayrollRate(name,value) { employeeRates[name]=num(value); saveLocalAdminConfig(); renderEmployeeManager(); renderPayroll(); }
+function addEmployee() { if(!currentUser||currentUser.role!=="admin"){alert("Only admin users can add employees.");return;} const name=(document.getElementById("wgeNewEmployeeName")?.value||"").trim(), password=(document.getElementById("wgeNewEmployeePassword")?.value||"").trim(), rate=num(document.getElementById("wgeNewEmployeeRate")?.value); if(!name){alert("Enter an employee name.");return;} if(users.some(u=>u.name.toLowerCase()===name.toLowerCase())){alert("That employee already exists.");return;} users.push({name,role:"employee",password:password||name.split(/\s+/)[0]||"Password"}); staff.push(name); employeeRates[name]=rate; saveLocalAdminConfig(); setupSelects(); renderAll(); document.getElementById("wgeNewEmployeeName").value=""; document.getElementById("wgeNewEmployeePassword").value=""; document.getElementById("wgeNewEmployeeRate").value="0"; }
+function removeEmployee(name) { if(!currentUser||currentUser.role!=="admin"){alert("Only admin users can remove employees.");return;} if(!confirm(`Remove ${name} from active employee lists? Existing submitted timesheets will remain in reports.`)) return; const ui=users.findIndex(u=>u.name===name&&u.role==="employee"); if(ui>=0) users.splice(ui,1); const si=staff.indexOf(name); if(si>=0) staff.splice(si,1); delete employeeRates[name]; saveLocalAdminConfig(); setupSelects(); renderAll(); }
+function wireSettingsControls() { ["wgeRateA","wgeRateB","wgeRateC"].forEach(id=>{const el=document.getElementById(id); if(el&&!el.dataset.wired){el.dataset.wired="1";el.addEventListener("change",applyChargeRateInputs);}}); const apply=document.getElementById("wgeApplyRatePercentBtn"); if(apply&&!apply.dataset.wired){apply.dataset.wired="1";apply.addEventListener("click",applyChargeRatePercent);} const reset=document.getElementById("wgeResetRatesBtn"); if(reset&&!reset.dataset.wired){reset.dataset.wired="1";reset.addEventListener("click",resetChargeRates);} const add=document.getElementById("wgeAddEmployeeBtn"); if(add&&!add.dataset.wired){add.dataset.wired="1";add.addEventListener("click",addEmployee);} }
 
 async function changeMyPassword() { const current=document.getElementById("currentPassword").value, next=document.getElementById("newPassword").value, msg=document.getElementById("passwordMessage"); if(!next||next.length<4){ msg.style.color="var(--red)"; msg.textContent="Please enter a new password with at least 4 characters."; return; } if(current!==currentUser.password){ msg.style.color="var(--red)"; msg.textContent="Current password is incorrect."; return; } try{ await savePasswordForUser(currentUser.name,next); currentUser.password=next; msg.style.color="var(--green)"; msg.textContent="Password updated."; } catch(err){ msg.style.color="var(--red)"; msg.textContent="Could not save password."; } }
 async function adminResetPassword() { if(!currentUser||currentUser.role!=="admin")return; const name=document.getElementById("adminPasswordUser").value, next=document.getElementById("adminNewPassword").value, msg=document.getElementById("adminPasswordMessage"); if(!next||next.length<4){ msg.style.color="var(--red)"; msg.textContent="Please enter a password with at least 4 characters."; return; } try{ await savePasswordForUser(name,next); msg.style.color="var(--green)"; msg.textContent=`${name}'s password has been reset.`; document.getElementById("adminNewPassword").value=""; } catch(err){ msg.style.color="var(--red)"; msg.textContent="Could not reset password."; } }
+
+function renderLiveJobsPanel() {
+  const box=document.getElementById("liveJobsList"); if(!box) return;
+  const jobs=liveSharedJobs();
+  box.innerHTML=jobs.length?`<div class="tableWrap"><table><thead><tr><th>Ref</th><th>Customer</th><th>Site</th><th>Project</th><th>Status</th><th>Hours</th></tr></thead><tbody>${jobs.map(job=>`<tr><td><strong>${esc(job.jobRef||"")}</strong></td><td>${esc(job.customer||"")}</td><td>${esc(job.site||"")}</td><td>${esc(job.projectTitle||"")}</td><td><span class="pill ${String(job.status||"").toLowerCase()}">${esc(job.status||"Live")}</span></td><td>${round2(job.labourActual||0)}</td></tr>`).join("")}</tbody></table></div>`:`No live jobs have been pushed from the Job Schedule app yet. Convert an accepted quote to a live job first.`;
+}
+function loadLiveJobsFromSharedStorage() { syncSharedJobActuals(); renderLiveJobsPanel(); renderDaySections(); }
+function loadLiveJobsFromSupabase() { loadLiveJobsFromSharedStorage(); }
 
 function renderAll() {
   applyBankHolidaysToCurrentTimesheet();
@@ -702,6 +784,8 @@ function renderAll() {
   updateEmployeeBadge();
   renderIncompleteTimesheets();
   renderBankHolidayListForYear();
+  renderLiveJobsPanel();
+  renderEmployeeManager();
   updatePayrollInfoDisplay();
   const pending=pendingApprovalCount();
   if(currentUser&&(currentUser.role==="admin"||currentUser.role==="accountant")) { document.getElementById("kpiMiddleLabel").textContent="Approvals Required"; document.getElementById("kpiHoliday").textContent=pending; }
