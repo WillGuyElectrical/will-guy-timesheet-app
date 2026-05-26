@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -250,6 +251,9 @@ th { color:var(--muted); font-size:12px; }
       <input id="wgeRatePercent" type="number" step="0.01" value="0">
     </div>
     <div>
+      <button class="btn" type="button" id="wgeSaveRateABtn">Save A Rate</button>
+    </div>
+    <div>
       <button class="btn2" type="button" id="wgeApplyRatePercentBtn">Apply % to A/B/C</button>
     </div>
     <div>
@@ -260,12 +264,19 @@ th { color:var(--muted); font-size:12px; }
   <div style="height:14px"></div>
 
   <h3>Employees</h3>
+  <p class="muted small">Use Add Employee for new starters. Use Remove Employee Login if someone leaves. Existing submitted timesheets stay in reports.</p>
+  <div class="wgeSettingsGrid" style="margin-top:10px">
+    <div><label>Remove Employee Login</label><select id="wgeRemoveEmployeeSelect"></select></div>
+    <div><button class="btnRed" type="button" id="wgeRemoveEmployeeBtn">Remove Employee Login</button></div>
+  </div>
+  <h3 style="margin-top:16px">Add Employee</h3>
   <div class="wgeSettingsGrid">
     <div><label>Employee Name</label><input id="wgeNewEmployeeName" placeholder="Employee name"></div>
     <div><label>Login Password</label><input id="wgeNewEmployeePassword" placeholder="Temporary password"></div>
     <div><label>Payroll Rate £/hr</label><input id="wgeNewEmployeeRate" type="number" step="0.01" value="0"></div>
     <div><button class="btn" type="button" id="wgeAddEmployeeBtn">Add Employee</button></div>
   </div>
+  <h3 style="margin-top:16px">Current Employees</h3>
   <div id="wgeEmployeeList" style="margin-top:10px"></div>
 </div>
 
@@ -316,10 +327,12 @@ const users = [
   {name:"David Guy",role:"admin",password:"Admin2012!"},
   {name:"GGM Accountants",role:"accountant",password:"GGM1234"}
 ];
+const DEFAULT_USERS = users.map(u=>({...u}));
 
 const SUPABASE_URL = "https://aktpqkwilspsjdaofltw.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFrdHBxa3dpbHNwc2pkYW9mbHR3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDkxNTIsImV4cCI6MjA5NDY4NTE1Mn0.YN0FtPZWDy6Ddb_BrUazD5ecRIlo1xl58lJUd5pyxQ0";
 const employeeRates = {"Gary Hancock":23,"Jody Lane":22,"Paul Rush":22,"William Guy":13.31};
+const DEFAULT_EMPLOYEE_RATES = {...employeeRates};
 const workingAwayAllowanceRate = 1;
 const staff = users.filter(u=>u.role==="employee").map(u=>u.name);
 const days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
@@ -337,7 +350,9 @@ function loadChargeRates(){return {...DEFAULT_CHARGE_RATES,...(safeParse(localSt
 let chargeRates = loadChargeRates();
 function saveChargeRates(){localStorage.setItem(CHARGE_RATES_KEY,JSON.stringify(chargeRates));}
 function saveLocalAdminConfig(){localStorage.setItem(LOCAL_USERS_KEY,JSON.stringify(users));localStorage.setItem(LOCAL_PAYROLL_RATES_KEY,JSON.stringify(employeeRates));saveChargeRates();}
-function loadLocalAdminConfig(){const localUsers=safeParse(localStorage.getItem(LOCAL_USERS_KEY),null); if(Array.isArray(localUsers)){users.splice(0,users.length,...localUsers);} const localRates=safeParse(localStorage.getItem(LOCAL_PAYROLL_RATES_KEY),null); if(localRates&&typeof localRates==="object"){Object.assign(employeeRates,localRates);} staff.splice(0,staff.length,...users.filter(u=>u.role==="employee").map(u=>u.name)); chargeRates=loadChargeRates();}
+function syncStaffFromUsers(){staff.splice(0,staff.length,...users.filter(u=>u.role==="employee").map(u=>u.name));}
+function restoreDefaultEmployeesIfEmpty(){ if(users.some(u=>u.role==="employee")){ syncStaffFromUsers(); return; } DEFAULT_USERS.filter(u=>u.role==="employee").forEach(u=>{ users.push({...u}); employeeRates[u.name]=employeeRates[u.name]||DEFAULT_EMPLOYEE_RATES[u.name]||0; }); syncStaffFromUsers(); saveLocalAdminConfig(); }
+function loadLocalAdminConfig(){const localUsers=safeParse(localStorage.getItem(LOCAL_USERS_KEY),null); if(Array.isArray(localUsers)&&localUsers.some(u=>u&&u.role==="employee")){users.splice(0,users.length,...localUsers);} const localRates=safeParse(localStorage.getItem(LOCAL_PAYROLL_RATES_KEY),null); if(localRates&&typeof localRates==="object"){Object.assign(employeeRates,localRates);} syncStaffFromUsers(); restoreDefaultEmployeesIfEmpty(); chargeRates=loadChargeRates();}
 function loadSharedJobs(){return safeParse(localStorage.getItem(SHARED_JOBS_KEY),[])||[];}
 function saveSharedJobs(list){localStorage.setItem(SHARED_JOBS_KEY,JSON.stringify(list||[]));}
 function loadSharedTimesheets(){return safeParse(localStorage.getItem(SHARED_TIMESHEETS_KEY),[])||[];}
@@ -780,22 +795,26 @@ function downloadCSV(filename,rows) { const csv=rows.map(row=>row.map(cell=>`"${
 function downloadFullBackup() { const stamp=new Date().toISOString().slice(0,10); const backup={created_at:new Date().toISOString(),timesheets:submissions,holidays:holidayRequests,users:users.map(u=>({name:u.name,role:u.role})),sharedJobs:loadSharedJobs(),sharedTimesheets:loadSharedTimesheets(),chargeRates,employeeRates}; const blob=new Blob([JSON.stringify(backup,null,2)],{type:"application/json;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`WGE-full-backup-${stamp}.json`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
 
 function renderEmployeeManager() {
-  const a=document.getElementById("wgeRateA"), b=document.getElementById("wgeRateB"), c=document.getElementById("wgeRateC"), list=document.getElementById("wgeEmployeeList");
+  restoreDefaultEmployeesIfEmpty();
+  const a=document.getElementById("wgeRateA"), b=document.getElementById("wgeRateB"), c=document.getElementById("wgeRateC"), list=document.getElementById("wgeEmployeeList"), removeSelect=document.getElementById("wgeRemoveEmployeeSelect");
   if(a) a.value=Number(chargeRates.a||0).toFixed(2);
   if(b) b.value=Number(chargeRates.b||0).toFixed(2);
   if(c) c.value=Number(chargeRates.c||0).toFixed(2);
+  if(removeSelect) removeSelect.innerHTML=staff.length?staff.map(name=>`<option value="${esc(name)}">${esc(name)}</option>`).join(""):`<option value="">No employees available</option>`;
   if(!list) return;
-  list.innerHTML=staff.map(name=>`<div class="job"><div class="bar"><div><strong>${esc(name)}</strong><p class="muted small">Payroll rate: ${money2(employeeRates[name]||0)} / hr</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><input style="max-width:130px" type="number" step="0.01" value="${esc(employeeRates[name]||0)}" onchange="updateEmployeePayrollRate('${esc(name)}',this.value)"><button class="btnRed" type="button" onclick="removeEmployee('${esc(name)}')">Remove</button></div></div></div>`).join("")||"<p class='muted small'>No employees set up.</p>";
+  list.innerHTML=staff.map(name=>`<div class="job"><div class="bar"><div><strong>${esc(name)}</strong><p class="muted small">Payroll rate: ${money2(employeeRates[name]||0)} / hr</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><input style="max-width:130px" aria-label="Payroll rate for ${esc(name)}" type="number" step="0.01" value="${esc(employeeRates[name]||0)}" onchange="updateEmployeePayrollRate('${esc(name)}',this.value)"><button class="btnRed" type="button" onclick="removeEmployee('${esc(name)}')">Remove Employee</button></div></div></div>`).join("")||"<p class='muted small'>No employees set up.</p>";
 }
 function refreshSharedCosts() { submissions.forEach(s=>upsertSharedTimesheet(normaliseTimesheetForShared(s))); syncSharedJobActuals(); }
 function ratesFromA(a){return {a:round2(a),b:round2(a*(DEFAULT_CHARGE_RATES.b/DEFAULT_CHARGE_RATES.a)),c:round2(a*(DEFAULT_CHARGE_RATES.c/DEFAULT_CHARGE_RATES.a))};}
-function applyChargeRateInputs() { chargeRates=ratesFromA(num(document.getElementById("wgeRateA")?.value)); saveLocalAdminConfig(); refreshSharedCosts(); renderAll(); }
-function applyChargeRatePercent() { const pct=num(document.getElementById("wgeRatePercent")?.value), factor=1+(pct/100); chargeRates={a:round2(chargeRates.a*factor),b:round2(chargeRates.b*factor),c:round2(chargeRates.c*factor)}; saveLocalAdminConfig(); refreshSharedCosts(); renderAll(); }
+function previewRatesFromA() { const preview=ratesFromA(num(document.getElementById("wgeRateA")?.value)); const b=document.getElementById("wgeRateB"), c=document.getElementById("wgeRateC"); if(b)b.value=Number(preview.b||0).toFixed(2); if(c)c.value=Number(preview.c||0).toFixed(2); }
+function applyChargeRateInputs() { chargeRates=ratesFromA(num(document.getElementById("wgeRateA")?.value)); saveLocalAdminConfig(); refreshSharedCosts(); renderAll(); alert("A/B/C charge rates saved."); }
+function applyChargeRatePercent() { const pct=num(document.getElementById("wgeRatePercent")?.value), factor=1+(pct/100); chargeRates={a:round2(chargeRates.a*factor),b:round2(chargeRates.b*factor),c:round2(chargeRates.c*factor)}; const p=document.getElementById("wgeRatePercent"); if(p) p.value=0; saveLocalAdminConfig(); refreshSharedCosts(); renderAll(); alert("Percentage change applied to A/B/C charge rates."); }
 function resetChargeRates() { chargeRates={...DEFAULT_CHARGE_RATES}; const p=document.getElementById("wgeRatePercent"); if(p) p.value=0; saveLocalAdminConfig(); refreshSharedCosts(); renderAll(); }
 function updateEmployeePayrollRate(name,value) { employeeRates[name]=num(value); saveLocalAdminConfig(); renderEmployeeManager(); renderPayroll(); }
 function addEmployee() { if(!currentUser||currentUser.role!=="admin"){alert("Only admin users can add employees.");return;} const name=(document.getElementById("wgeNewEmployeeName")?.value||"").trim(), password=(document.getElementById("wgeNewEmployeePassword")?.value||"").trim(), rate=num(document.getElementById("wgeNewEmployeeRate")?.value); if(!name){alert("Enter an employee name.");return;} if(users.some(u=>u.name.toLowerCase()===name.toLowerCase())){alert("That employee already exists.");return;} users.push({name,role:"employee",password:password||name.split(/\s+/)[0]||"Password"}); staff.push(name); employeeRates[name]=rate; saveLocalAdminConfig(); setupSelects(); renderAll(); document.getElementById("wgeNewEmployeeName").value=""; document.getElementById("wgeNewEmployeePassword").value=""; document.getElementById("wgeNewEmployeeRate").value="0"; }
-function removeEmployee(name) { if(!currentUser||currentUser.role!=="admin"){alert("Only admin users can remove employees.");return;} if(!confirm(`Remove ${name} from active employee lists? Existing submitted timesheets will remain in reports.`)) return; const ui=users.findIndex(u=>u.name===name&&u.role==="employee"); if(ui>=0) users.splice(ui,1); const si=staff.indexOf(name); if(si>=0) staff.splice(si,1); delete employeeRates[name]; saveLocalAdminConfig(); setupSelects(); renderAll(); }
-function wireSettingsControls() { ["wgeRateA","wgeRateB","wgeRateC"].forEach(id=>{const el=document.getElementById(id); if(el&&!el.dataset.wired){el.dataset.wired="1";el.addEventListener("change",applyChargeRateInputs);}}); const apply=document.getElementById("wgeApplyRatePercentBtn"); if(apply&&!apply.dataset.wired){apply.dataset.wired="1";apply.addEventListener("click",applyChargeRatePercent);} const reset=document.getElementById("wgeResetRatesBtn"); if(reset&&!reset.dataset.wired){reset.dataset.wired="1";reset.addEventListener("click",resetChargeRates);} const add=document.getElementById("wgeAddEmployeeBtn"); if(add&&!add.dataset.wired){add.dataset.wired="1";add.addEventListener("click",addEmployee);} }
+function removeEmployee(name) { if(!currentUser||currentUser.role!=="admin"){alert("Only admin users can remove employees.");return;} if(!confirm(`Remove ${name} from the active employee login list? Existing submitted timesheets will remain in reports.`)) return; const ui=users.findIndex(u=>u.name===name&&u.role==="employee"); if(ui>=0) users.splice(ui,1); const si=staff.indexOf(name); if(si>=0) staff.splice(si,1); delete employeeRates[name]; saveLocalAdminConfig(); setupSelects(); renderAll(); alert(`${name} has been removed from the active employee list.`); }
+function removeSelectedEmployee() { const name=document.getElementById("wgeRemoveEmployeeSelect")?.value; if(!name){alert("There is no employee selected to remove.");return;} removeEmployee(name); }
+function wireSettingsControls() { const a=document.getElementById("wgeRateA"); if(a&&!a.dataset.wired){a.dataset.wired="1";a.addEventListener("input",previewRatesFromA);a.addEventListener("keydown",e=>{if(e.key==="Enter")applyChargeRateInputs();});} const saveA=document.getElementById("wgeSaveRateABtn"); if(saveA&&!saveA.dataset.wired){saveA.dataset.wired="1";saveA.addEventListener("click",applyChargeRateInputs);} const apply=document.getElementById("wgeApplyRatePercentBtn"); if(apply&&!apply.dataset.wired){apply.dataset.wired="1";apply.addEventListener("click",applyChargeRatePercent);} const reset=document.getElementById("wgeResetRatesBtn"); if(reset&&!reset.dataset.wired){reset.dataset.wired="1";reset.addEventListener("click",resetChargeRates);} const add=document.getElementById("wgeAddEmployeeBtn"); if(add&&!add.dataset.wired){add.dataset.wired="1";add.addEventListener("click",addEmployee);} const remove=document.getElementById("wgeRemoveEmployeeBtn"); if(remove&&!remove.dataset.wired){remove.dataset.wired="1";remove.addEventListener("click",removeSelectedEmployee);} }
 
 async function changeMyPassword() { const current=document.getElementById("currentPassword").value, next=document.getElementById("newPassword").value, msg=document.getElementById("passwordMessage"); if(!next||next.length<4){ msg.style.color="var(--red)"; msg.textContent="Please enter a new password with at least 4 characters."; return; } if(current!==currentUser.password){ msg.style.color="var(--red)"; msg.textContent="Current password is incorrect."; return; } try{ await savePasswordForUser(currentUser.name,next); currentUser.password=next; msg.style.color="var(--green)"; msg.textContent="Password updated."; } catch(err){ msg.style.color="var(--red)"; msg.textContent="Could not save password."; } }
 async function adminResetPassword() { if(!currentUser||currentUser.role!=="admin")return; const name=document.getElementById("adminPasswordUser").value, next=document.getElementById("adminNewPassword").value, msg=document.getElementById("adminPasswordMessage"); if(!next||next.length<4){ msg.style.color="var(--red)"; msg.textContent="Please enter a password with at least 4 characters."; return; } try{ await savePasswordForUser(name,next); msg.style.color="var(--green)"; msg.textContent=`${name}'s password has been reset.`; document.getElementById("adminNewPassword").value=""; } catch(err){ msg.style.color="var(--red)"; msg.textContent="Could not reset password."; } }
