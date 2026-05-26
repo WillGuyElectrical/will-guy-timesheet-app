@@ -59,13 +59,17 @@ th { color:var(--muted); font-size:12px; }
 .overdueCard { border-left:6px solid var(--red); }
 .okCard { border-left:6px solid var(--green); }
 .bigStatus { font-size:18px; font-weight:900; }
+.weeklyTotalsGrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin-top:10px; }
+.weeklyTotalBox { background:#f8fafc; border:1px solid var(--border); border-radius:16px; padding:11px; }
+.weeklyTotalBox span { display:block; color:var(--muted); font-size:12px; font-weight:800; margin-bottom:4px; }
+.weeklyTotalBox strong { font-size:22px; }
 .tableWrap { overflow:auto; }
 .approvalEmployeeGroup { border:1px solid var(--border); border-radius:18px; margin-top:12px; overflow:hidden; background:#fff; }
 .approvalEmployeeHead { background:#eef7fc; padding:12px; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; }
 .inlineEditor { margin-top:12px; border:2px solid var(--blue); border-radius:18px; padding:12px; background:#f8fcff; }
 @media print {
   body { background:white; color:#102033; }
-  .top,.tabs,button,#dashboard,#timesheet,#holiday,#approvals,#settings,#updates,#incomplete,#backup { display:none!important; }
+  .top,.tabs,button,#dashboard,#timesheet,#holiday,#approvals,#settings,#updates,#submitted,#incomplete,#backup { display:none!important; }
   .wrap { padding:0; max-width:none; }
   #payroll { display:block!important; }
   .card { box-shadow:none; border:1px solid #dbe5ef; break-inside:avoid; }
@@ -141,6 +145,7 @@ th { color:var(--muted); font-size:12px; }
     <button id="tabTimesheet" class="tab" onclick="showTab('timesheet')">Timesheet</button>
     <button id="tabHoliday" class="tab" onclick="showTab('holiday')">Holiday</button>
     <button id="tabUpdates" class="tab employeeOnly" onclick="showTab('updates')">My Updates <span id="employeeBadge" class="badge hidden">0</span></button>
+    <button id="tabSubmitted" class="tab employeeOnly" onclick="showTab('submitted')">Submitted Timesheets</button>
     <button id="tabSettings" class="tab" onclick="showTab('settings')">Settings</button>
     <button id="tabApprovals" class="tab adminOnly hidden" onclick="showTab('approvals')">Approvals <span id="approvalBadge" class="badge hidden">0</span></button>
     <button id="tabIncomplete" class="tab adminOnly hidden" onclick="showTab('incomplete')">Incomplete <span id="incompleteBadge" class="badge hidden">0</span></button>
@@ -181,10 +186,14 @@ th { color:var(--muted); font-size:12px; }
       <div id="daySections"></div>
     </div>
     <div class="card">
-      <h2>Totals</h2><p class="muted small">Lunch is deducted once per day only, from the job worked between 12:00 and 13:00.</p>
-      <div class="grid grid3" style="margin-top:10px">
-        <p>A Normal: <strong id="totalA">0</strong></p><p>B 1.5x: <strong id="totalB">0</strong></p><p>C Double: <strong id="totalC">0</strong></p>
-        <p>Travel: <strong id="totalTravel">0</strong></p><p>Working Away: <strong id="totalAway">0</strong></p><p>Total: <strong id="totalHours">0</strong></p>
+      <h2>Weekly Totals</h2><p class="muted small">Lunch is deducted once per day only, from the job worked between 12:00 and 13:00.</p>
+      <div class="weeklyTotalsGrid">
+        <div class="weeklyTotalBox"><span>A Normal</span><strong id="totalA">0</strong></div>
+        <div class="weeklyTotalBox"><span>B 1.5x</span><strong id="totalB">0</strong></div>
+        <div class="weeklyTotalBox"><span>C Double</span><strong id="totalC">0</strong></div>
+        <div class="weeklyTotalBox"><span>Travel</span><strong id="totalTravel">0</strong></div>
+        <div class="weeklyTotalBox"><span>Working Away</span><strong id="totalAway">0</strong></div>
+        <div class="weeklyTotalBox"><span>Total Hours</span><strong id="totalHours">0</strong></div>
       </div>
       <div style="height:12px"></div>
       <label style="display:flex;align-items:flex-start;gap:10px;font-size:14px;color:var(--text)"><input id="signed" type="checkbox" style="width:auto;margin-top:3px"> I confirm these hours are correct.</label>
@@ -214,6 +223,8 @@ th { color:var(--muted); font-size:12px; }
   </section>
 
   <section id="updates" class="hidden"><div class="card"><h2>My Updates</h2><p class="muted small">Approved or rejected timesheets and holiday requests will show here.</p><div id="employeeUpdates"></div></div></section>
+
+  <section id="submitted" class="hidden"><div class="card"><h2>Submitted Timesheets</h2><p class="muted small">If you change a submitted timesheet it will go back to Pending and Wayne/David must approve it again before payroll includes it.</p><div id="employeeSubmittedTimesheets"></div></div></section>
 
   <section id="settings" class="hidden">
 
@@ -451,7 +462,7 @@ function setupSelects() {
 }
 
 function showTab(tab) {
-  ["dashboard","timesheet","holiday","updates","settings","approvals","incomplete","backup","payroll"].forEach(id=>{
+  ["dashboard","timesheet","holiday","updates","submitted","settings","approvals","incomplete","backup","payroll"].forEach(id=>{
     const sec=document.getElementById(id); if(sec) sec.classList.toggle("hidden",id!==tab);
     const t=document.getElementById("tab"+id[0].toUpperCase()+id.slice(1)); if(t) t.classList.toggle("active",id===tab);
   });
@@ -665,40 +676,46 @@ function submittedJobEditorHtml(timesheet,job,index) {
 function submittedTimesheetEditorHtml(timesheet) {
   return `<div class="inlineEditor">\n    <div class="bar"><div><h3>Edit submitted hours</h3><p class="muted small">Change site, start/finish, job details and hours. Press Save Changes when finished.</p></div><button class="btn2" onclick="closeSubmittedTimesheetEditor()">Close</button></div>\n    ${(timesheet.jobs||[]).map((job,index)=>submittedJobEditorHtml(timesheet,job,index)).join("")}\n    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn2" onclick="addSubmittedJobLine('${timesheet.id}')">Add line</button><button class="btn" onclick="saveSubmittedTimesheetEdit('${timesheet.id}')">Save Changes</button></div>\n  </div>`;
 }
-function openSubmittedTimesheetEditor(timesheetId) { editingSubmittedTimesheetId=String(timesheetId); renderApprovals(); }
-function closeSubmittedTimesheetEditor() { editingSubmittedTimesheetId=null; renderApprovals(); }
+function canEditSubmittedTimesheet(timesheet) { return currentUser&&(currentUser.role==="admin"||currentUser.role==="accountant"||(currentUser.role==="employee"&&timesheet.employee===currentUser.name)); }
+function openSubmittedTimesheetEditor(timesheetId) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!canEditSubmittedTimesheet(timesheet)){alert("You can only edit your own submitted timesheets.");return;} editingSubmittedTimesheetId=String(timesheetId); renderAll(); }
+function closeSubmittedTimesheetEditor() { editingSubmittedTimesheetId=null; renderAll(); }
 function updateSubmittedJobField(timesheetId,index,field,value,isNumber=false) {
   const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!timesheet.jobs[index]) return;
+  if(!canEditSubmittedTimesheet(timesheet)) return;
   timesheet.jobs[index][field]=isNumber?num(value):value;
   if(isNumber) recalcSubmittedTimesheetTotals(timesheet);
 }
 function updateSubmittedSite(timesheetId,index,value) {
   const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!timesheet.jobs[index]) return;
+  if(!canEditSubmittedTimesheet(timesheet)) return;
   const job=timesheet.jobs[index]; const jobDate=dateForTimesheetDay(timesheet.date,job.day);
   const shared=findSharedJob(value);
   if(shared){
     job.jobRef=shared.jobRef; job.jobNo=shared.jobRef; job.customer=shared.customer||""; job.site=shared.site||shared.jobRef; job.siteAddress=shared.address||"";
     job.manualSite=""; job.projectTitle=shared.projectTitle||""; job.costingType=shared.costingType||""; job.description=shared.projectTitle||shared.scope||job.description||"";
-    job.finalSite=getSiteName(job); recalcSubmittedTimesheetTotals(timesheet); renderApprovals(); return;
+    job.finalSite=getSiteName(job); recalcSubmittedTimesheetTotals(timesheet); renderAll(); return;
   }
-  if(value==="Holiday" && isBankHolidayDate(jobDate)) { alert("Holiday cannot be booked on a bank holiday. Bank holidays are paid separately as Bank Holiday."); renderApprovals(); return; }
+  if(value==="Holiday" && isBankHolidayDate(jobDate)) { alert("Holiday cannot be booked on a bank holiday. Bank holidays are paid separately as Bank Holiday."); renderAll(); return; }
   job.jobRef=""; job.customer=""; job.projectTitle=""; job.costingType="";
   job.site=value; if(value!=="Manual") job.manualSite=""; if(value!=="Ashco"&&value!=="Kensal") job.siteAddress="";
   if(value==="Holiday") { job.description="Holiday pay"; job.start=""; job.finish=""; job.a=8; job.b=0; job.c=0; job.travel=0; job.away=0; job.holidayHours=8; job.manual=true; }
   if(value==="Bank Holiday") { job.description="Bank holiday pay"; job.start=""; job.finish=""; job.a=8; job.b=0; job.c=0; job.travel=0; job.away=0; job.holidayHours=0; job.manual=true; }
-  job.finalSite=getSiteName(job); recalcSubmittedTimesheetTotals(timesheet); renderApprovals();
+  job.finalSite=getSiteName(job); recalcSubmittedTimesheetTotals(timesheet); renderAll();
 }
-function addSubmittedJobLine(timesheetId) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet) return; if(!Array.isArray(timesheet.jobs)) timesheet.jobs=[]; timesheet.jobs.push({...newJob("Monday"), manual:true}); recalcSubmittedTimesheetTotals(timesheet); renderApprovals(); }
-function deleteSubmittedJobLine(timesheetId,index) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs) return; if(!confirm("Remove this line from the submitted timesheet?")) return; timesheet.jobs.splice(index,1); recalcSubmittedTimesheetTotals(timesheet); renderApprovals(); }
+function addSubmittedJobLine(timesheetId) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!canEditSubmittedTimesheet(timesheet)) return; if(!Array.isArray(timesheet.jobs)) timesheet.jobs=[]; timesheet.jobs.push({...newJob("Monday"), manual:true}); recalcSubmittedTimesheetTotals(timesheet); renderAll(); }
+function deleteSubmittedJobLine(timesheetId,index) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!canEditSubmittedTimesheet(timesheet)) return; if(!confirm("Remove this line from the submitted timesheet?")) return; timesheet.jobs.splice(index,1); recalcSubmittedTimesheetTotals(timesheet); renderAll(); }
 async function saveSubmittedTimesheetEdit(timesheetId) {
   const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet) return;
+  if(!canEditSubmittedTimesheet(timesheet)){alert("You can only edit your own submitted timesheets.");return;}
   (timesheet.jobs||[]).forEach(j=>{ j.finalSite=getSiteName(j); }); recalcSubmittedTimesheetTotals(timesheet);
+  const employeeResubmission=currentUser&&currentUser.role==="employee";
+  if(employeeResubmission){ timesheet.status="Pending"; timesheet.resubmittedAt=new Date().toISOString(); }
   try{ await updateTimesheetInSupabase(timesheet); }
   catch(err){ console.warn("Saved timesheet edit locally because Supabase update failed.", err); }
   upsertSharedTimesheet(normaliseTimesheetForShared(timesheet));
   syncSharedJobActuals();
   saveLocalTimesheetState();
-  editingSubmittedTimesheetId=null; renderAll(); alert("Timesheet changes saved.");
+  editingSubmittedTimesheetId=null; renderAll(); alert(employeeResubmission?"Timesheet changes saved and re-submitted for approval.":"Timesheet changes saved.");
 }
 
 function timesheetJobSummaryHtml(timesheet) {
@@ -707,6 +724,18 @@ function timesheetJobSummaryHtml(timesheet) {
   return `<div class="tableWrap" style="margin-top:10px;border:1px solid var(--border);border-radius:16px"><table><thead><tr><th>Day</th><th>Site / Job</th><th>Start</th><th>Finish</th><th>A</th><th>B</th><th>C</th><th>Travel</th><th>Away</th><th>Total</th></tr></thead><tbody>${orderedDays.map(day=>grouped[day].map(job=>{ const h=submittedJobHours(job); return `<tr><td><strong>${day}</strong></td><td><strong>${submittedJobSite(job)||"Site not entered"}</strong><div class="small muted">${job.jobNo?"Job "+job.jobNo+" — ":""}${job.description||""}</div></td><td>${job.start||"-"}</td><td>${job.finish||"-"}</td><td>${round2(h.a)}</td><td>${round2(h.b)}</td><td>${round2(h.c)}</td><td>${round2(h.travel)}</td><td>${round2(h.away)}</td><td><strong>${round2(h.total)}</strong></td></tr>`; }).join("")).join("")}</tbody></table></div>`;
 }
 function recalcSubmittedTimesheetTotals(timesheet) { const totals=(timesheet.jobs||[]).reduce((a,j)=>{a.a+=num(j.a);a.b+=num(j.b);a.c+=num(j.c);a.travel+=num(j.travel);a.away+=num(j.away);return a;},{a:0,b:0,c:0,travel:0,away:0}); timesheet.totals=totals; return totals; }
+function weeklyTotalsHtml(totals) {
+  const t=totals||{a:0,b:0,c:0,travel:0,away:0};
+  const total=round2(num(t.a)+num(t.b)+num(t.c)+num(t.travel)+num(t.away));
+  return `<div class="weeklyTotalsGrid">
+    <div class="weeklyTotalBox"><span>A Normal</span><strong>${round2(t.a)}</strong></div>
+    <div class="weeklyTotalBox"><span>B 1.5x</span><strong>${round2(t.b)}</strong></div>
+    <div class="weeklyTotalBox"><span>C Double</span><strong>${round2(t.c)}</strong></div>
+    <div class="weeklyTotalBox"><span>Travel</span><strong>${round2(t.travel)}</strong></div>
+    <div class="weeklyTotalBox"><span>Working Away</span><strong>${round2(t.away)}</strong></div>
+    <div class="weeklyTotalBox"><span>Total Hours</span><strong>${total}</strong></div>
+  </div>`;
+}
 function timesheetLineLabel(job,index) { const h=submittedJobHours(job); return `${index+1}. ${job.day||""} — ${submittedJobSite(job)||"Site not entered"} — ${job.start||"-"} to ${job.finish||"-"} — A ${round2(h.a)} / B ${round2(h.b)} / C ${round2(h.c)} / Travel ${round2(h.travel)} / Away ${round2(h.away)}`; }
 async function editSubmittedJob(timesheetId,jobIndex) { if(!currentUser||currentUser.role!=="admin"){alert("Only Wayne/David admin can edit submitted timesheets.");return;} const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!timesheet.jobs[jobIndex]) return; const job=timesheet.jobs[jobIndex]; const site=prompt("Site / location",job.finalSite||job.site||""); if(site===null)return; const description=prompt("Description",job.description||""); if(description===null)return; const start=prompt("Start time",job.start||""); if(start===null)return; const finish=prompt("Finish time",job.finish||""); if(finish===null)return; const a=prompt("A normal hours",round2(job.a||0)); if(a===null)return; const b=prompt("B time and half hours",round2(job.b||0)); if(b===null)return; const c=prompt("C double hours",round2(job.c||0)); if(c===null)return; const travel=prompt("Travel hours",round2(job.travel||0)); if(travel===null)return; const away=prompt("Working away hours",round2(job.away||0)); if(away===null)return; job.finalSite=site; job.site=site; job.description=description; job.start=start; job.finish=finish; job.a=num(a); job.b=num(b); job.c=num(c); job.travel=num(travel); job.away=num(away); recalcSubmittedTimesheetTotals(timesheet); try{ await updateTimesheetInSupabase(timesheet); }catch(err){ console.warn("Saved line edit locally because Supabase update failed.", err); } upsertSharedTimesheet(normaliseTimesheetForShared(timesheet)); syncSharedJobActuals(); saveLocalTimesheetState(); renderAll(); alert("Timesheet line updated."); }
 async function manuallyEditTimesheet(timesheetId) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet)return; const lines=(timesheet.jobs||[]).map((j,i)=>timesheetLineLabel(j,i)).join("\n"); const choice=prompt("Which line do you want to edit?\n\n"+lines+"\n\nEnter line number:"); if(choice===null)return; const index=Number(choice)-1; if(!timesheet.jobs||!timesheet.jobs[index]){alert("Invalid line number.");return;} await editSubmittedJob(timesheetId,index); }
@@ -721,24 +750,31 @@ function renderApprovals() {
   const weekItems=approvalWeekEndingFilter?submissions.filter(s=>s.date===approvalWeekEndingFilter):submissions;
   const grouped={}; approvalSort(weekItems).forEach(s=>{ const emp=s.employee||"Unknown employee"; if(!grouped[emp]) grouped[emp]=[]; grouped[emp].push(s); });
   const employees=Object.keys(grouped).sort((a,b)=>a.localeCompare(b));
-  ts.innerHTML=employees.length?employees.map(emp=>`<div class="approvalEmployeeGroup"><div class="approvalEmployeeHead"><strong>${esc(emp)}</strong><span class="muted small">${approvalSummaryForEmployee(grouped[emp])}</span></div>${grouped[emp].map(s=>`<div class="job"><div class="bar"><strong>Week ending ${formatWeekEndingLabel(s.date)||s.date}</strong><span class="pill ${String(s.status||"Pending").toLowerCase()}">${s.status}</span></div><p class="muted small" style="margin-top:6px"><strong class="bigStatus">Weekly totals:</strong> A ${round2(s.totals?.a)} / B ${round2(s.totals?.b)} / C ${round2(s.totals?.c)} / Travel ${round2(s.totals?.travel)} / Away ${round2(s.totals?.away)}</p>${timesheetJobSummaryHtml(s)}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button><button class="btn2" onclick="openSubmittedTimesheetEditor('${s.id}')">Edit submitted hours</button><button class="btn2" onclick="editSubmittedTimesheetTotals('${s.id}')">Edit totals only</button><button class="btnRed" onclick="deleteSubmittedTimesheet('${s.id}')">Delete timesheet</button><button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button></div>${String(editingSubmittedTimesheetId)===String(s.id)?submittedTimesheetEditorHtml(s):""}</div>`).join("")}</div>`).join(""):`<p class='muted' style='margin-top:12px'>No timesheets submitted for this week ending.</p>`;
+  ts.innerHTML=employees.length?employees.map(emp=>`<div class="approvalEmployeeGroup"><div class="approvalEmployeeHead"><strong>${esc(emp)}</strong><span class="muted small">${approvalSummaryForEmployee(grouped[emp])}</span></div>${grouped[emp].map(s=>`<div class="job"><div class="bar"><div><strong>Week ending ${formatWeekEndingLabel(s.date)||s.date}</strong><p class="muted small">Weekly totals before payroll approval.</p></div><span class="pill ${String(s.status||"Pending").toLowerCase()}">${s.status}</span></div>${weeklyTotalsHtml(s.totals)}${timesheetJobSummaryHtml(s)}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button><button class="btn2" onclick="openSubmittedTimesheetEditor('${s.id}')">Edit submitted hours</button><button class="btn2" onclick="editSubmittedTimesheetTotals('${s.id}')">Edit totals only</button><button class="btnRed" onclick="deleteSubmittedTimesheet('${s.id}')">Delete timesheet</button><button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button></div>${String(editingSubmittedTimesheetId)===String(s.id)?submittedTimesheetEditorHtml(s):""}</div>`).join("")}</div>`).join(""):`<p class='muted' style='margin-top:12px'>No timesheets submitted for this week ending.</p>`;
   hs.innerHTML=holidayRequests.length?approvalSort(holidayRequests).map(h=>`<div class="job"><div class="bar"><strong>${h.employee} — ${h.days} days</strong><span class="pill ${h.status.toLowerCase()}">${h.status}</span></div><p class="muted small">${formatDateShort(h.from)} to ${formatDateShort(h.to)} — ${h.notes||"No notes"}</p><div style="display:flex;gap:8px;margin-top:8px"><button class="btnGreen" onclick="setStatus('holiday','${h.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('holiday','${h.id}','Rejected')">Reject</button><button class="btnRed" onclick="deleteHolidayRequest('${h.id}')">Delete</button></div></div>`).join(""):"<p class='muted'>No holiday requests.</p>";
 }
 function updateApprovalBadge() { const count=pendingApprovalCount(), badge=document.getElementById("approvalBadge"), tab=document.getElementById("tabApprovals"); if(!badge||!tab)return; badge.textContent=count; badge.classList.toggle("hidden",count===0); tab.classList.toggle("hasPending",count>0); const dash=document.getElementById("dashboardApprovalCount"); if(dash) dash.textContent=count; }
 function employeeUpdateCount() { if(!currentUser||currentUser.role!=="employee") return 0; return submissions.filter(s=>s.employee===currentUser.name&&(s.status==="Approved"||s.status==="Rejected")).length + holidayRequests.filter(h=>h.employee===currentUser.name&&(h.status==="Approved"||h.status==="Rejected")).length; }
 function updateEmployeeBadge() { const count=employeeUpdateCount(), badge=document.getElementById("employeeBadge"); if(!badge)return; badge.textContent=count; badge.classList.toggle("hidden",count===0); }
-function renderEmployeeUpdates() { const box=document.getElementById("employeeUpdates"); if(!box||!currentUser||currentUser.role!=="employee")return; const items=[]; submissions.filter(s=>s.employee===currentUser.name&&(s.status==="Approved"||s.status==="Rejected")).forEach(s=>items.push({type:"Timesheet",title:`Timesheet ${formatWeekEndingLabel(s.date)||s.date}`,status:s.status,detail:`A ${round2(s.totals.a)} / B ${round2(s.totals.b)} / C ${round2(s.totals.c)} / Travel ${round2(s.totals.travel)}`})); holidayRequests.filter(h=>h.employee===currentUser.name&&(h.status==="Approved"||h.status==="Rejected")).forEach(h=>items.push({type:"Holiday",title:`Holiday ${formatDateShort(h.from)} to ${formatDateShort(h.to)}`,status:h.status,detail:`${h.days} day(s) requested`})); box.innerHTML=items.length?items.map(item=>`<div class="job"><div class="bar"><strong>${item.title}</strong><span class="pill ${item.status.toLowerCase()}">${item.status}</span></div><p class="muted small">${item.type} — ${item.detail}</p></div>`).join(""):"<p class='muted'>No updates yet.</p>"; }
+function renderEmployeeUpdates() { const box=document.getElementById("employeeUpdates"); if(!box||!currentUser||currentUser.role!=="employee")return; const items=[]; submissions.filter(s=>s.employee===currentUser.name&&(s.status==="Approved"||s.status==="Rejected")).forEach(s=>items.push({type:"Timesheet",title:`Timesheet ${formatWeekEndingLabel(s.date)||s.date}`,status:s.status,detail:`A ${round2(s.totals.a)} / B ${round2(s.totals.b)} / C ${round2(s.totals.c)} / Travel ${round2(s.totals.travel)} / Working Away ${round2(s.totals.away)}`})); holidayRequests.filter(h=>h.employee===currentUser.name&&(h.status==="Approved"||h.status==="Rejected")).forEach(h=>items.push({type:"Holiday",title:`Holiday ${formatDateShort(h.from)} to ${formatDateShort(h.to)}`,status:h.status,detail:`${h.days} day(s) requested`})); box.innerHTML=items.length?items.map(item=>`<div class="job"><div class="bar"><strong>${item.title}</strong><span class="pill ${item.status.toLowerCase()}">${item.status}</span></div><p class="muted small">${item.type} — ${item.detail}</p></div>`).join(""):"<p class='muted'>No updates yet.</p>"; }
+function renderEmployeeSubmittedTimesheets() {
+  const box=document.getElementById("employeeSubmittedTimesheets"); if(!box||!currentUser||currentUser.role!=="employee")return;
+  const mine=approvalSort(submissions.filter(s=>s.employee===currentUser.name));
+  box.innerHTML=mine.length?mine.map(s=>`<div class="job"><div class="bar"><div><strong>Week ending ${formatWeekEndingLabel(s.date)||s.date}</strong><p class="muted small">Weekly totals for this submitted timesheet.</p></div><span class="pill ${String(s.status||"Pending").toLowerCase()}">${s.status||"Pending"}</span></div>${weeklyTotalsHtml(s.totals)}${timesheetJobSummaryHtml(s)}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn2" onclick="openSubmittedTimesheetEditor('${s.id}')">Edit / Re-submit Hours</button></div>${String(editingSubmittedTimesheetId)===String(s.id)?submittedTimesheetEditorHtml(s):""}</div>`).join(""):"<p class='muted'>No submitted timesheets yet.</p>";
+}
 
 function previousSundayFromNow() { const now=new Date(); const d=new Date(now.getFullYear(),now.getMonth(),now.getDate(),12); const day=d.getDay(); const diff=day===0?7:day; d.setDate(d.getDate()-diff); return localISODate(d); }
 function isAfterMonday9am() { const now=new Date(); const day=now.getDay(); if(day>1)return true; if(day<1)return false; return now.getHours()>=9; }
 function renderIncompleteTimesheets() { const box=document.getElementById("incompleteTimesheets"); if(!box)return; const weekEnding=previousSundayFromNow(); const rows=staff.map(name=>{ const submission=submissions.find(s=>s.employee===name&&s.date===weekEnding&&s.status!=="Rejected"); return {name,weekEnding,submitted:!!submission,status:submission?.status||"Missing"}; }); const missing=rows.filter(r=>!r.submitted); const badge=document.getElementById("incompleteBadge"); if(badge){ badge.textContent=missing.length; badge.classList.toggle("hidden",missing.length===0); } box.innerHTML=rows.map(r=>`<div class="job ${!r.submitted&&isAfterMonday9am()?"overdueCard":r.submitted?"okCard":""}"><div class="bar"><strong>${r.name}</strong><span class="pill ${r.submitted?"approved":"rejected"}">${r.submitted?r.status:"Not submitted"}</span></div><p class="muted small">Required by 9:00am Monday for week ending ${formatWeekEndingLabel(r.weekEnding)}</p></div>`).join(""); }
 
 function payrollAmount(employee,totals) { const rate=employeeRates[employee]||0; return {normalPay:round2(num(totals.a)*rate),timeHalfPay:round2(num(totals.b)*rate*1.5),doublePay:round2(num(totals.c)*rate*2),travelPay:round2(num(totals.travel)*rate),workingAwayAllowance:round2(num(totals.away)*workingAwayAllowanceRate),totalPay:round2(num(totals.a)*rate+num(totals.b)*rate*1.5+num(totals.c)*rate*2+num(totals.travel)*rate+num(totals.away)*workingAwayAllowanceRate)}; }
-function monthlyTotalsByEmployee() { const map={}; submissions.filter(s=>s.status==="Approved").forEach(s=>{ if(!map[s.employee]) map[s.employee]={employee:s.employee,a:0,b:0,c:0,travel:0,away:0}; map[s.employee].a+=num(s.totals.a); map[s.employee].b+=num(s.totals.b); map[s.employee].c+=num(s.totals.c); map[s.employee].travel+=num(s.totals.travel); map[s.employee].away+=num(s.totals.away); }); return Object.values(map); }
+function payrollPeriodForDate(date=new Date()) { const currentCutoff=payrollCutoffSundayForMonth(date.getFullYear(),date.getMonth()); const previousMonth=new Date(date.getFullYear(),date.getMonth()-1,1,12); const previousCutoff=payrollCutoffSundayForMonth(previousMonth.getFullYear(),previousMonth.getMonth()); return {currentCutoff,previousCutoff,payDate:lastWorkingDayOfMonth(date.getFullYear(),date.getMonth())}; }
+function isTimesheetInCurrentPayroll(s) { const p=payrollPeriodForDate(); return s.status==="Approved" && s.date>p.previousCutoff && s.date<=p.currentCutoff; }
+function monthlyTotalsByEmployee() { const map={}; submissions.filter(isTimesheetInCurrentPayroll).forEach(s=>{ if(!map[s.employee]) map[s.employee]={employee:s.employee,a:0,b:0,c:0,travel:0,away:0}; map[s.employee].a+=num(s.totals.a); map[s.employee].b+=num(s.totals.b); map[s.employee].c+=num(s.totals.c); map[s.employee].travel+=num(s.totals.travel); map[s.employee].away+=num(s.totals.away); }); return Object.values(map); }
 function renderPayroll() { const rows=monthlyTotalsByEmployee().map(t=>{ const a=payrollAmount(t.employee,t); return `<tr><td>${t.employee}</td><td>${pounds(employeeRates[t.employee]||0)}</td><td>${round2(t.a)}</td><td>${round2(t.b)}</td><td>${round2(t.c)}</td><td>${round2(t.travel)}</td><td>${round2(t.away)}</td><td>${pounds(a.totalPay)}</td></tr>`; }).join(""); document.getElementById("payrollRows").innerHTML=rows||"<tr><td colspan='8' class='muted'>No approved timesheets yet.</td></tr>"; }
 function lastWorkingDayOfMonth(year,monthIndex) { const d=new Date(year,monthIndex+1,0,12); while(d.getDay()===0||d.getDay()===6||isBankHolidayDate(localISODate(d))) d.setDate(d.getDate()-1); return localISODate(d); }
 function payrollCutoffSundayForMonth(year,monthIndex) { const lastWork=new Date(lastWorkingDayOfMonth(year,monthIndex)+"T12:00:00"); const d=new Date(lastWork); while(d.getDay()!==0) d.setDate(d.getDate()-1); return localISODate(d); }
-function updatePayrollInfoDisplay() { const box=document.getElementById("payrollCutoffInfo"); if(!box)return; const now=new Date(); const payDate=lastWorkingDayOfMonth(now.getFullYear(),now.getMonth()); const cutoff=payrollCutoffSundayForMonth(now.getFullYear(),now.getMonth()); box.innerHTML=`<strong>${now.toLocaleDateString("en-GB",{month:"long",year:"numeric"})} payroll</strong><br>Pay date: ${formatDateShort(payDate)}<br>Include approved timesheets up to week ending Sunday ${formatWeekEndingLabel(cutoff)}.`; }
+function updatePayrollInfoDisplay() { const box=document.getElementById("payrollCutoffInfo"); if(!box)return; const now=new Date(); const p=payrollPeriodForDate(now); box.innerHTML=`<strong>${now.toLocaleDateString("en-GB",{month:"long",year:"numeric"})} payroll</strong><br>Pay date: ${formatDateShort(p.payDate)}<br>Includes approved timesheets after Sunday ${formatWeekEndingLabel(p.previousCutoff)} and up to Sunday ${formatWeekEndingLabel(p.currentCutoff)}.<br><span class="small">No manual reset needed: next month uses the next payroll period automatically.</span>`; }
 function exportPayrollCSV() { const rows=[["Employee","Hourly Rate","A","B","C","Travel","Away","Total Gross"]]; monthlyTotalsByEmployee().forEach(t=>{ const a=payrollAmount(t.employee,t); rows.push([t.employee,pounds(employeeRates[t.employee]||0),round2(t.a),round2(t.b),round2(t.c),round2(t.travel),round2(t.away),pounds(a.totalPay)]); }); downloadCSV("WGE_Monthly_Payroll_Totals.csv",rows); }
 function downloadCSV(filename,rows) { const csv=rows.map(row=>row.map(cell=>`"${String(cell??"").replaceAll('"','""')}"`).join(",")).join("\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
 function downloadFullBackup() { const stamp=new Date().toISOString().slice(0,10); const backup={created_at:new Date().toISOString(),timesheets:submissions,holidays:holidayRequests,users:users.map(u=>({name:u.name,role:u.role})),sharedJobs:loadSharedJobs(),sharedTimesheets:loadSharedTimesheets(),chargeRates,employeeRates}; const blob=new Blob([JSON.stringify(backup,null,2)],{type:"application/json;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`WGE-full-backup-${stamp}.json`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
@@ -780,6 +816,7 @@ function renderAll() {
   renderApprovals();
   renderPayroll();
   renderEmployeeUpdates();
+  renderEmployeeSubmittedTimesheets();
   updateApprovalBadge();
   updateEmployeeBadge();
   renderIncompleteTimesheets();
