@@ -356,11 +356,13 @@ const employeeRates = {"Gary Hancock":23,"Jody Lane":22,"Paul Rush":22,"William 
 const DEFAULT_EMPLOYEE_RATES = {...employeeRates};
 const workingAwayAllowanceRate = 1;
 const staff = users.filter(u=>u.role==="employee").map(u=>u.name);
+const SALARIED_STAFF = ["Wayne Bonney","David Guy"];
 const days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const sites = ["Long Sutton","McCormick's","Mizkan","Team","Ashco","Kensal","Holiday","Bank Holiday","Manual"];
 let currentUser = null, jobs = [], submissions = [], holidayRequests = [], approvalWeekEndingFilter = "", editingSubmittedTimesheetId = null, forcedWeekEndingDate = "";
 const SHARED_JOBS_KEY = "wgeSharedJobsV1";
 const SHARED_TIMESHEETS_KEY = "wgeSharedTimesheetsV1";
+const SHARED_HOLIDAYS_KEY = "wgeSharedHolidaysV1";
 const CHARGE_RATES_KEY = "wgeChargeRatesV1";
 const LOCAL_USERS_KEY = "wgeTimesheetUsersV1";
 const LOCAL_PAYROLL_RATES_KEY = "wgeTimesheetPayrollRatesV1";
@@ -384,6 +386,9 @@ function loadSharedJobs(){return safeParse(localStorage.getItem(SHARED_JOBS_KEY)
 function saveSharedJobs(list){localStorage.setItem(SHARED_JOBS_KEY,JSON.stringify(list||[]));}
 function loadSharedTimesheets(){return safeParse(localStorage.getItem(SHARED_TIMESHEETS_KEY),[])||[];}
 function saveSharedTimesheets(list){localStorage.setItem(SHARED_TIMESHEETS_KEY,JSON.stringify(list||[]));}
+function activeTimesheetPeople(){return [...new Set([...staff,...SALARIED_STAFF])];}
+function payrollPeople(){return staff.filter(name=>!SALARIED_STAFF.includes(name));}
+function saveSharedHolidays(list){localStorage.setItem(SHARED_HOLIDAYS_KEY,JSON.stringify((list||[]).filter(h=>h&&h.status==="Approved")));}
 function liveSharedJobs(){return loadSharedJobs().filter(j=>!["Closed","Invoiced","Rejected"].includes(String(j.status||""))); }
 function sharedJobLabel(job){return `${job.jobRef} - ${job.customer||""}${job.site?" / "+job.site:""}${job.projectTitle?" - "+job.projectTitle:""}`;}
 function findSharedJob(ref){return loadSharedJobs().find(j=>j.jobRef===ref);}
@@ -393,7 +398,7 @@ function lineHours(job){return round2(num(job.a)+num(job.b)+num(job.c)+num(job.t
 function lineLabourCost(employee,job){return round2(num(job.a)*chargeRates.a+num(job.b)*chargeRates.b+num(job.c)*chargeRates.c+num(job.travel)*chargeRates.a);}
 function normaliseTimesheetForShared(item){return {...item,jobs:(item.jobs||[]).map(j=>({...j,labourHours:lineHours(j),labourCost:lineLabourCost(item.employee,j)}))};}
 function syncSharedJobActuals(){const timesheets=loadSharedTimesheets().filter(t=>t.status!=="Rejected"); const shared=loadSharedJobs().map(job=>{const actual={labourActual:0,labourCost:0,employeeAllocations:{},timesheets:[]}; timesheets.forEach(t=>(t.jobs||[]).filter(line=>line.jobRef===job.jobRef||line.jobNo===job.jobRef).forEach(line=>{const h=lineHours(line); actual.labourActual+=h; actual.labourCost+=lineLabourCost(t.employee,line); actual.employeeAllocations[t.employee]=(actual.employeeAllocations[t.employee]||0)+h; actual.timesheets.push({timesheetId:t.id,employee:t.employee,date:t.date,status:t.status,hours:h,notes:line.description||""});})); return {...job,labourActual:round2(actual.labourActual),labourCost:round2(actual.labourCost),employeeAllocations:actual.employeeAllocations,timesheets:actual.timesheets,progress:actual.labourActual>0?"In Progress":job.progress||"Not Started"};}); saveSharedJobs(shared);}
-function saveLocalTimesheetState(){localStorage.setItem("wgeTimesheetSubmissionsV1",JSON.stringify(submissions));localStorage.setItem("wgeTimesheetHolidaysV1",JSON.stringify(holidayRequests));}
+function saveLocalTimesheetState(){localStorage.setItem("wgeTimesheetSubmissionsV1",JSON.stringify(submissions));localStorage.setItem("wgeTimesheetHolidaysV1",JSON.stringify(holidayRequests));saveSharedHolidays(holidayRequests);}
 loadLocalAdminConfig();
 
 const bankHolidaysEnglandWales = [
@@ -497,7 +502,7 @@ async function login() {
 function logout() { location.reload(); }
 
 function setupSelects() {
-  const allowed=currentUser.role==="admin" ? staff : currentUser.role==="employee" ? [currentUser.name] : staff;
+  const allowed=currentUser.role==="admin" ? activeTimesheetPeople() : currentUser.role==="employee" ? [currentUser.name] : activeTimesheetPeople();
   ["employeeSelect","holidayEmployee"].forEach(id=>{ const el=document.getElementById(id); if(el) el.innerHTML=allowed.map(n=>`<option>${n}</option>`).join(""); });
   const adminHolidayEmployee=document.getElementById("adminHolidayEmployee"); if(adminHolidayEmployee) adminHolidayEmployee.innerHTML=staff.map(n=>`<option>${n}</option>`).join("");
   const adminPasswordUser=document.getElementById("adminPasswordUser"); if(adminPasswordUser) adminPasswordUser.innerHTML=users.filter(u=>u.role==="employee").map(u=>`<option>${u.name}</option>`).join("");
@@ -737,7 +742,7 @@ function holidayDateItemsForEmployee(employeeName) {
 }
 function renderHolidayBalances() {
   const help=document.getElementById("holidayBalanceHelp"); if(help) help.textContent=`Showing ${holidayYear} holiday balances. Weekend dates and bank holidays are ignored. Annual allowance is ${holidayAllowance} day(s).`;
-  const balances=staff.map(name=>{ const items=holidayDateItemsForEmployee(name); const requestUsed=items.filter(i=>i.source==="Holiday Request").reduce((a,i)=>a+num(i.days),0); const timesheetHolidayUsed=items.filter(i=>i.source==="Timesheet Holiday").reduce((a,i)=>a+num(i.days),0); const used=requestUsed+timesheetHolidayUsed; return {name,used,requestUsed,timesheetHolidayUsed,left:holidayAllowance-used,items}; });
+  const balances=activeTimesheetPeople().map(name=>{ const items=holidayDateItemsForEmployee(name); const requestUsed=items.filter(i=>i.source==="Holiday Request").reduce((a,i)=>a+num(i.days),0); const timesheetHolidayUsed=items.filter(i=>i.source==="Timesheet Holiday").reduce((a,i)=>a+num(i.days),0); const used=requestUsed+timesheetHolidayUsed; return {name,used,requestUsed,timesheetHolidayUsed,left:holidayAllowance-used,items}; });
   const visible=currentUser?.role==="admin"||currentUser?.role==="accountant"?balances:balances.filter(b=>b.name===currentUser?.name);
   document.getElementById("holidayBalances").innerHTML=visible.map(b=>{ const rows=b.items.length?`<div class="tableWrap" style="margin-top:12px;border:1px solid var(--border);border-radius:16px"><table><thead><tr><th>Holiday Dates</th><th>Days</th><th>Status</th><th>Source</th><th>Notes</th></tr></thead><tbody>${b.items.map(item=>`<tr><td><strong>${formatDateShort(item.from)}${item.to&&item.to!==item.from?" → "+formatDateShort(item.to):""}</strong><div class="small muted">${item.dates.map(formatDateShort).join(", ")}</div></td><td>${round2(item.days)}</td><td><span class="pill ${String(item.status||"pending").toLowerCase()}">${item.status}</span></td><td>${item.source}</td><td>${item.notes||""}</td></tr>`).join("")}</tbody></table></div>`:`<p class="muted small" style="margin-top:10px">No holiday dates recorded for ${holidayYear} yet.</p>`; return `<div class="job"><div class="bar"><div><strong>${b.name}</strong><p class="small muted">${round2(b.used)} used/booked from ${holidayAllowance}. Holiday requests: ${round2(b.requestUsed)} day(s). Timesheet holidays: ${round2(b.timesheetHolidayUsed)} day(s).</p></div><strong style="font-size:22px;color:${b.left<0?"var(--red)":"var(--green)"}">${round2(b.left)} left</strong></div>${rows}</div>`; }).join("");
   const mine=balances.find(b=>b.name===(currentUser?.role==="employee"?currentUser.name:document.getElementById("holidayEmployee")?.value))||balances[0]; if(mine && currentUser?.role==="employee") document.getElementById("kpiHoliday").textContent=round2(mine.left);
@@ -865,7 +870,7 @@ function isAfterMonday9am() { const now=new Date(); const day=now.getDay(); if(d
 function renderIncompleteTimesheets() {
   const box=document.getElementById("incompleteTimesheets"); if(!box)return;
   const weekEnding=previousSundayFromNow();
-  const rows=staff.map(name=>{ const submission=submissions.find(s=>s.employee===name&&s.date===weekEnding&&s.status!=="Rejected"); return {name,weekEnding,submitted:!!submission,status:submission?.status||"Missing"}; });
+  const rows=payrollPeople().map(name=>{ const submission=submissions.find(s=>s.employee===name&&s.date===weekEnding&&s.status!=="Rejected"); return {name,weekEnding,submitted:!!submission,status:submission?.status||"Missing"}; });
   const overdue=rows.filter(r=>!r.submitted&&isAfterMonday9am());
   const badge=document.getElementById("incompleteBadge"), tab=document.getElementById("tabIncomplete");
   if(badge){ badge.textContent=overdue.length; badge.classList.toggle("hidden",overdue.length===0); }
@@ -876,7 +881,7 @@ function renderIncompleteTimesheets() {
 function payrollAmount(employee,totals) { const rate=employeeRates[employee]||0; return {normalPay:round2(num(totals.a)*rate),timeHalfPay:round2(num(totals.b)*rate*1.5),doublePay:round2(num(totals.c)*rate*2),travelPay:round2(num(totals.travel)*rate),workingAwayAllowance:round2(num(totals.away)*workingAwayAllowanceRate),totalPay:round2(num(totals.a)*rate+num(totals.b)*rate*1.5+num(totals.c)*rate*2+num(totals.travel)*rate+num(totals.away)*workingAwayAllowanceRate)}; }
 function payrollPeriodForDate(date=new Date()) { const currentCutoff=payrollCutoffSundayForMonth(date.getFullYear(),date.getMonth()); const previousMonth=new Date(date.getFullYear(),date.getMonth()-1,1,12); const previousCutoff=payrollCutoffSundayForMonth(previousMonth.getFullYear(),previousMonth.getMonth()); return {currentCutoff,previousCutoff,payDate:lastWorkingDayOfMonth(date.getFullYear(),date.getMonth())}; }
 function isTimesheetInCurrentPayroll(s) { const p=payrollPeriodForDate(); return s.status==="Approved" && s.date>p.previousCutoff && s.date<=p.currentCutoff; }
-function monthlyTotalsByEmployee() { const map={}; submissions.filter(isTimesheetInCurrentPayroll).forEach(s=>{ if(!map[s.employee]) map[s.employee]={employee:s.employee,a:0,b:0,c:0,travel:0,away:0}; map[s.employee].a+=num(s.totals.a); map[s.employee].b+=num(s.totals.b); map[s.employee].c+=num(s.totals.c); map[s.employee].travel+=num(s.totals.travel); map[s.employee].away+=num(s.totals.away); }); return Object.values(map); }
+function monthlyTotalsByEmployee() { const map={}; submissions.filter(isTimesheetInCurrentPayroll).filter(s=>!SALARIED_STAFF.includes(s.employee)).forEach(s=>{ if(!map[s.employee]) map[s.employee]={employee:s.employee,a:0,b:0,c:0,travel:0,away:0}; map[s.employee].a+=num(s.totals.a); map[s.employee].b+=num(s.totals.b); map[s.employee].c+=num(s.totals.c); map[s.employee].travel+=num(s.totals.travel); map[s.employee].away+=num(s.totals.away); }); return Object.values(map); }
 function renderPayroll() { const rows=monthlyTotalsByEmployee().map(t=>{ const a=payrollAmount(t.employee,t); return `<tr><td>${t.employee}</td><td>${pounds(employeeRates[t.employee]||0)}</td><td>${round2(t.a)}</td><td>${round2(t.b)}</td><td>${round2(t.c)}</td><td>${round2(t.travel)}</td><td>${round2(t.away)}</td><td>${pounds(a.totalPay)}</td></tr>`; }).join(""); document.getElementById("payrollRows").innerHTML=rows||"<tr><td colspan='8' class='muted'>No approved timesheets yet.</td></tr>"; }
 function lastWorkingDayOfMonth(year,monthIndex) { const d=new Date(year,monthIndex+1,0,12); while(d.getDay()===0||d.getDay()===6||isBankHolidayDate(localISODate(d))) d.setDate(d.getDate()-1); return localISODate(d); }
 function payrollCutoffSundayForMonth(year,monthIndex) { const lastWork=new Date(lastWorkingDayOfMonth(year,monthIndex)+"T12:00:00"); const d=new Date(lastWork); while(d.getDay()!==0) d.setDate(d.getDate()-1); return localISODate(d); }
