@@ -37,7 +37,7 @@ button { border:0; border-radius:14px; padding:12px 14px; font-weight:800; curso
 .tabs { display:flex; gap:8px; overflow:auto; padding:4px 0 14px; }
 .tab { background:white; color:var(--blue2); border:1px solid var(--border); white-space:nowrap; }
 .tab.active { background:var(--blue); color:white; border-color:var(--blue); }
-.tab.hasPending { background:#fff7ed; color:#9a3412; border-color:#fed7aa; }
+.tab.hasPending { background:#fee2e2; color:#b91c1c; border-color:#fca5a5; }
 .badge { display:inline-flex; min-width:22px; height:22px; padding:0 7px; border-radius:999px; align-items:center; justify-content:center; background:#dc2626; color:white; font-size:12px; font-weight:900; margin-left:6px; }
 .bar { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 .kpi { display:flex; justify-content:space-between; align-items:center; }
@@ -181,7 +181,7 @@ th { color:var(--muted); font-size:12px; }
       <div style="height:12px"></div>
       <div class="grid grid2">
         <div><label>Employee</label><select id="employeeSelect" onchange="refreshWeekEndingDropdown(); resetJobs(); applyBankHolidaysToCurrentTimesheet(); renderAll();"></select></div>
-        <div><label>Week Ending Sunday</label><select id="timesheetDate" onchange="resetJobs(); applyBankHolidaysToCurrentTimesheet(); renderAll();"></select><p class="muted small" style="margin-top:6px">Only outstanding Sunday week-ending dates are shown. Once submitted, that Sunday disappears from the list.</p></div>
+        <div><label>Week Ending Sunday</label><select id="timesheetDate" onchange="forcedWeekEndingDate=''; resetJobs(); applyBankHolidaysToCurrentTimesheet(); renderAll();"></select><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn2" type="button" onclick="resetWeekEndingDate()">Reset / Show Previous Week</button></div><p class="muted small" style="margin-top:6px">Lads submit each Monday for the previous Sunday week ending. Submitted weeks are hidden unless they are rejected or deleted by admin.</p></div>
       </div>
       <div id="daySections"></div>
     </div>
@@ -358,7 +358,7 @@ const workingAwayAllowanceRate = 1;
 const staff = users.filter(u=>u.role==="employee").map(u=>u.name);
 const days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const sites = ["Long Sutton","McCormick's","Mizkan","Team","Ashco","Kensal","Holiday","Bank Holiday","Manual"];
-let currentUser = null, jobs = [], submissions = [], holidayRequests = [], approvalWeekEndingFilter = "", editingSubmittedTimesheetId = null;
+let currentUser = null, jobs = [], submissions = [], holidayRequests = [], approvalWeekEndingFilter = "", editingSubmittedTimesheetId = null, forcedWeekEndingDate = "";
 const SHARED_JOBS_KEY = "wgeSharedJobsV1";
 const SHARED_TIMESHEETS_KEY = "wgeSharedTimesheetsV1";
 const CHARGE_RATES_KEY = "wgeChargeRatesV1";
@@ -472,11 +472,8 @@ function dateRangeTouchesHolidayYear(fromDate,toDate){return !!fromDate&&!!toDat
 function dateForTimesheetDay(weekEndingDate, dayName) { if(!weekEndingDate) return ""; const sunday=new Date(weekEndingDate+"T12:00:00"); const dayIndex=days.indexOf(dayName); if(dayIndex<0) return ""; const d=new Date(sunday); d.setDate(sunday.getDate()-(6-dayIndex)); return localISODate(d); }
 
 function upcomingSundays(count=30) {
-  const dates=[]; const now=new Date(); const start=new Date(now.getFullYear(),now.getMonth(),1,12); const end=new Date(now.getFullYear(),now.getMonth()+1,0,12);
-  const cur=new Date(start);
-  while(cur<=end) { if(cur.getDay()===0) dates.push(localISODate(cur)); cur.setDate(cur.getDate()+1); }
-  const next=new Date(now.getFullYear(),now.getMonth(),now.getDate(),12); while(next.getDay()!==0) next.setDate(next.getDate()+1);
-  while(dates.length<count) { const iso=localISODate(next); if(!dates.includes(iso)) dates.push(iso); next.setDate(next.getDate()+7); }
+  const dates=[], start=new Date(previousSundayFromNow()+"T12:00:00");
+  for(let i=0;i<count;i++) { const d=new Date(start); d.setDate(start.getDate()+(i*7)); dates.push(localISODate(d)); }
   return dates;
 }
 function formatWeekEndingLabel(dateString) { if(!dateString) return ""; const d=new Date(dateString+"T12:00:00"); return d.toLocaleDateString("en-GB",{weekday:"long",day:"2-digit",month:"short",year:"numeric"}); }
@@ -522,8 +519,27 @@ function showTab(tab) {
 function hasSubmittedWeek(employeeName,weekEndingDate) { return submissions.some(s=>s.employee===employeeName && s.date===weekEndingDate && s.status!=="Rejected"); }
 function refreshWeekEndingDropdown() {
   const ts=document.getElementById("timesheetDate"), emp=document.getElementById("employeeSelect"); if(!ts||!emp) return;
-  const available=upcomingSundays(30).filter(d=>!hasSubmittedWeek(emp.value,d));
+  const selected=ts.value||forcedWeekEndingDate;
+  let available=upcomingSundays(30).filter(d=>!hasSubmittedWeek(emp.value,d));
+  if(forcedWeekEndingDate && !hasSubmittedWeek(emp.value,forcedWeekEndingDate) && !available.includes(forcedWeekEndingDate)) available.unshift(forcedWeekEndingDate);
   ts.innerHTML=available.length?available.map(d=>`<option value="${d}">${formatWeekEndingLabel(d)}</option>`).join(""):`<option value="">No outstanding Sundays</option>`;
+  if(selected && available.includes(selected)) ts.value=selected;
+  else if(available.includes(previousSundayFromNow())) ts.value=previousSundayFromNow();
+}
+function resetWeekEndingDate() {
+  const ts=document.getElementById("timesheetDate"), emp=document.getElementById("employeeSelect"); if(!ts||!emp) return;
+  const previous=previousSundayFromNow();
+  if(hasSubmittedWeek(emp.value,previous)) {
+    alert(`Week ending ${formatWeekEndingLabel(previous)} is hidden because ${emp.value} already has a submitted timesheet. Use Submitted Timesheets to edit/re-submit it, or Wayne/David can reject/delete it from Approvals.`);
+    return;
+  }
+  forcedWeekEndingDate=previous;
+  refreshWeekEndingDropdown();
+  ts.value=previous;
+  resetJobs();
+  applyBankHolidaysToCurrentTimesheet();
+  renderAll();
+  alert(`Week ending ${formatWeekEndingLabel(previous)} is now selected.`);
 }
 
 function siteOptionsForDay(day) {
@@ -846,7 +862,16 @@ function renderEmployeeSubmittedTimesheets() {
 
 function previousSundayFromNow() { const now=new Date(); const d=new Date(now.getFullYear(),now.getMonth(),now.getDate(),12); const day=d.getDay(); const diff=day===0?7:day; d.setDate(d.getDate()-diff); return localISODate(d); }
 function isAfterMonday9am() { const now=new Date(); const day=now.getDay(); if(day>1)return true; if(day<1)return false; return now.getHours()>=9; }
-function renderIncompleteTimesheets() { const box=document.getElementById("incompleteTimesheets"); if(!box)return; const weekEnding=previousSundayFromNow(); const rows=staff.map(name=>{ const submission=submissions.find(s=>s.employee===name&&s.date===weekEnding&&s.status!=="Rejected"); return {name,weekEnding,submitted:!!submission,status:submission?.status||"Missing"}; }); const missing=rows.filter(r=>!r.submitted); const badge=document.getElementById("incompleteBadge"); if(badge){ badge.textContent=missing.length; badge.classList.toggle("hidden",missing.length===0); } box.innerHTML=rows.map(r=>`<div class="job ${!r.submitted&&isAfterMonday9am()?"overdueCard":r.submitted?"okCard":""}"><div class="bar"><strong>${r.name}</strong><span class="pill ${r.submitted?"approved":"rejected"}">${r.submitted?r.status:"Not submitted"}</span></div><p class="muted small">Required by 9:00am Monday for week ending ${formatWeekEndingLabel(r.weekEnding)}</p></div>`).join(""); }
+function renderIncompleteTimesheets() {
+  const box=document.getElementById("incompleteTimesheets"); if(!box)return;
+  const weekEnding=previousSundayFromNow();
+  const rows=staff.map(name=>{ const submission=submissions.find(s=>s.employee===name&&s.date===weekEnding&&s.status!=="Rejected"); return {name,weekEnding,submitted:!!submission,status:submission?.status||"Missing"}; });
+  const overdue=rows.filter(r=>!r.submitted&&isAfterMonday9am());
+  const badge=document.getElementById("incompleteBadge"), tab=document.getElementById("tabIncomplete");
+  if(badge){ badge.textContent=overdue.length; badge.classList.toggle("hidden",overdue.length===0); }
+  if(tab) tab.classList.toggle("hasPending",overdue.length>0);
+  box.innerHTML=rows.map(r=>`<div class="job ${!r.submitted&&isAfterMonday9am()?"overdueCard":r.submitted?"okCard":""}"><div class="bar"><strong>${r.name}</strong><span class="pill ${r.submitted?"approved":"rejected"}">${r.submitted?r.status:"Not submitted"}</span></div><p class="muted small">Required by 9:00am Monday for week ending ${formatWeekEndingLabel(r.weekEnding)}</p></div>`).join("");
+}
 
 function payrollAmount(employee,totals) { const rate=employeeRates[employee]||0; return {normalPay:round2(num(totals.a)*rate),timeHalfPay:round2(num(totals.b)*rate*1.5),doublePay:round2(num(totals.c)*rate*2),travelPay:round2(num(totals.travel)*rate),workingAwayAllowance:round2(num(totals.away)*workingAwayAllowanceRate),totalPay:round2(num(totals.a)*rate+num(totals.b)*rate*1.5+num(totals.c)*rate*2+num(totals.travel)*rate+num(totals.away)*workingAwayAllowanceRate)}; }
 function payrollPeriodForDate(date=new Date()) { const currentCutoff=payrollCutoffSundayForMonth(date.getFullYear(),date.getMonth()); const previousMonth=new Date(date.getFullYear(),date.getMonth()-1,1,12); const previousCutoff=payrollCutoffSundayForMonth(previousMonth.getFullYear(),previousMonth.getMonth()); return {currentCutoff,previousCutoff,payDate:lastWorkingDayOfMonth(date.getFullYear(),date.getMonth())}; }
