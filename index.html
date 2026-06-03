@@ -66,6 +66,10 @@ th { color:var(--muted); font-size:12px; }
 .tableWrap { overflow:auto; }
 .approvalEmployeeGroup { border:1px solid var(--border); border-radius:18px; margin-top:12px; overflow:hidden; background:#fff; }
 .approvalEmployeeHead { background:#eef7fc; padding:12px; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center; }
+.approvalEmployeeGroup.pendingGroup { border-color:#fca5a5; box-shadow:0 0 0 2px rgba(220,38,38,.08); }
+.approvalEmployeeGroup.pendingGroup .approvalEmployeeHead { background:#fee2e2; color:#7f1d1d; }
+.approvalBanner { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; border:1px solid #fca5a5; background:#fee2e2; color:#7f1d1d; border-radius:18px; padding:12px 14px; margin-top:12px; font-weight:800; }
+.approvalBanner strong { color:#991b1b; }
 .inlineEditor { margin-top:12px; border:2px solid var(--blue); border-radius:18px; padding:12px; background:#f8fcff; }
 @media print {
   body { background:white; color:#102033; }
@@ -169,8 +173,9 @@ th { color:var(--muted); font-size:12px; }
   
 <div class="card" id="liveJobsPanel">
   <h2>Live Jobs</h2>
-  <p class="muted small">Jobs accepted in the WGE Job Schedule will appear here for timesheet selection.</p>
-  <button class="btn2" type="button" onclick="loadLiveJobsFromSharedStorage()">Refresh Live Jobs</button>
+  <p class="muted small">Jobs accepted in the WGE Job Schedule will appear here for timesheet selection. The app auto-refreshes live jobs every Friday at 10:00pm, or catches up when it is next opened.</p>
+  <button class="btn2" type="button" onclick="loadLiveJobsFromSharedStorage(true)">Refresh Live Jobs</button>
+  <p id="liveJobsAutoStatus" class="muted small" style="margin-top:8px"></p>
   <div id="liveJobsList" class="liveJobHelp">Live jobs load from shared local storage after quotes are converted.</div>
 </div>
 
@@ -352,6 +357,7 @@ const DEFAULT_USERS = users.map(u=>({...u}));
 
 const SUPABASE_URL = "https://aktpqkwilspsjdaofltw.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFrdHBxa3dpbHNwc2pkYW9mbHR3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDkxNTIsImV4cCI6MjA5NDY4NTE1Mn0.YN0FtPZWDy6Ddb_BrUazD5ecRIlo1xl58lJUd5pyxQ0";
+const WGE_SUPABASE_APP_KEY = "b7f7f971177d6ed1b358e56ff1d5f9e8fca4edaad332ed8ead7eebbc7f77141f";
 const employeeRates = {"Gary Hancock":23,"Jody Lane":22,"Paul Rush":22,"William Guy":13.31};
 const DEFAULT_EMPLOYEE_RATES = {...employeeRates};
 const workingAwayAllowanceRate = 1;
@@ -368,6 +374,7 @@ const LOCAL_USERS_KEY = "wgeTimesheetUsersV1";
 const LOCAL_PAYROLL_RATES_KEY = "wgeTimesheetPayrollRatesV1";
 const HOLIDAY_YEAR_KEY = "wgeHolidayYearV1";
 const HOLIDAY_ALLOWANCE_KEY = "wgeHolidayAllowanceV1";
+const LIVE_JOBS_AUTO_REFRESH_LAST_KEY = "wgeLiveJobsAutoRefreshLastFriday10pmV1";
 const DEFAULT_CHARGE_RATES = {a:49,b:57.33,c:66.15};
 function safeParse(text,fallback){try{return JSON.parse(text)}catch(e){return fallback}}
 function money2(value){return "£"+Number(value||0).toFixed(2);}
@@ -389,7 +396,7 @@ function saveSharedTimesheets(list){localStorage.setItem(SHARED_TIMESHEETS_KEY,J
 function activeTimesheetPeople(){return [...new Set([...staff,...SALARIED_STAFF])];}
 function payrollPeople(){return staff.filter(name=>!SALARIED_STAFF.includes(name));}
 function saveSharedHolidays(list){localStorage.setItem(SHARED_HOLIDAYS_KEY,JSON.stringify((list||[]).filter(h=>h&&h.status==="Approved")));}
-function liveSharedJobs(){return loadSharedJobs().filter(j=>!["Closed","Invoiced","Rejected"].includes(String(j.status||""))); }
+function liveSharedJobs(){return loadSharedJobs().filter(j=>!["Closed","Invoiced","Rejected","Quote","Draft","Superseded"].includes(String(j.status||""))); }
 function sharedJobLabel(job){return `${job.jobRef} - ${job.customer||""}${job.site?" / "+job.site:""}${job.projectTitle?" - "+job.projectTitle:""}`;}
 function findSharedJob(ref){return loadSharedJobs().find(j=>j.jobRef===ref);}
 function upsertSharedTimesheet(item){const list=loadSharedTimesheets(); const idx=list.findIndex(x=>String(x.id)===String(item.id)); if(idx>=0)list[idx]=item; else list.unshift(item); saveSharedTimesheets(list);}
@@ -420,7 +427,7 @@ const bankHolidaysEnglandWales = [
   {date:"2027-12-28", title:"Boxing Day substitute"}
 ];
 
-function supabaseHeaders(extra={}) { return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY,"Content-Type":"application/json","Prefer":"return=representation",...extra}; }
+function supabaseHeaders(extra={}) { return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY,"x-wge-app-key":WGE_SUPABASE_APP_KEY,"Content-Type":"application/json","Prefer":"return=representation",...extra}; }
 async function sbGet(table) { const res=await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*`,{headers:supabaseHeaders({"Prefer":""})}); if(!res.ok) throw new Error(await res.text()); return await res.json(); }
 async function sbInsert(table,row) { const res=await fetch(`${SUPABASE_URL}/rest/v1/${table}`,{method:"POST",headers:supabaseHeaders(),body:JSON.stringify(row)}); if(!res.ok) throw new Error(await res.text()); const data=await res.json(); return data[0]; }
 async function sbPatch(table,id,patch) { const res=await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`,{method:"PATCH",headers:supabaseHeaders(),body:JSON.stringify(patch)}); if(!res.ok) throw new Error(await res.text()); const data=await res.json(); return data[0]; }
@@ -435,11 +442,10 @@ async function loadData() {
   submissions=safeParse(localStorage.getItem("wgeTimesheetSubmissionsV1"),[])||[];
   holidayRequests=safeParse(localStorage.getItem("wgeTimesheetHolidaysV1"),[])||[];
   try {
-    const [dbTimesheets,dbHolidays,dbUsers]=await Promise.all([sbGet("timesheets"),sbGet("holidays"),sbGet("users")]);
+    const [dbTimesheets,dbHolidays]=await Promise.all([sbGet("timesheets"),sbGet("holidays")]);
     submissions=dbTimesheets.map(dbTimesheetToApp);
     holidayRequests=dbHolidays.map(dbHolidayToApp);
     saveLocalTimesheetState();
-    dbUsers.forEach(dbUser=>{ const existing=users.find(u=>u.name===dbUser.name); if(existing){ existing.role=dbUser.role||existing.role; existing.password=dbUser.password||existing.password; } });
   } catch(err) {
     console.error(err);
     console.warn("Using local timesheet storage because Supabase could not be loaded.");
@@ -456,8 +462,8 @@ async function updateTimesheetInSupabase(item) { return await sbPatch("timesheet
 async function deleteHolidaySupabase(id) { return await sbDelete("holidays",id); }
 async function savePasswordForUser(name,password) {
   const user=users.find(u=>u.name===name); if(user) user.password=password;
-  const res=await fetch(`${SUPABASE_URL}/rest/v1/users?name=eq.${encodeURIComponent(name)}`,{method:"PATCH",headers:supabaseHeaders(),body:JSON.stringify({password})});
-  if(!res.ok) throw new Error(await res.text());
+  saveLocalAdminConfig();
+  return true;
 }
 
 function localISODate(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
@@ -497,7 +503,7 @@ async function login() {
   document.getElementById("currentRole").textContent=currentUser.role==="admin"?"Admin access enabled":currentUser.role==="accountant"?"Accountant access enabled":"Employee access";
   document.querySelectorAll(".adminOnly").forEach(el=>el.classList.toggle("hidden",!(currentUser.role==="admin"||currentUser.role==="accountant")));
   document.querySelectorAll(".employeeOnly").forEach(el=>el.classList.toggle("hidden",currentUser.role!=="employee"));
-  setupSelects(); wireSettingsControls(); resetJobs(); applyBankHolidaysToCurrentTimesheet(); renderAll();
+  setupSelects(); wireSettingsControls(); resetJobs(); applyBankHolidaysToCurrentTimesheet(); renderAll(); startLiveJobsAutoRefresh();
 }
 function logout() { location.reload(); }
 
@@ -547,14 +553,31 @@ function resetWeekEndingDate() {
   alert(`Week ending ${formatWeekEndingLabel(previous)} is now selected.`);
 }
 
-function siteOptionsForDay(day) {
-  const liveOptions=liveSharedJobs().map(j=>j.jobRef);
+function normaliseJobText(value) { return String(value||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim(); }
+function jobMatchesSite(job,site) {
+  if(!site || site==="Manual" || site==="Holiday" || site==="Bank Holiday") return false;
+  const selected=normaliseJobText(site);
+  const candidates=[job.site,job.customer,`${job.customer||""} ${job.site||""}`,job.projectTitle].map(normaliseJobText).filter(Boolean);
+  return candidates.some(v=>v===selected || v.includes(selected) || selected.includes(v));
+}
+function activeSiteOptionsForDay(day) {
   let options=(day==="Saturday"||day==="Sunday") ? sites.filter(s=>s!=="Holiday"&&s!=="Bank Holiday") : sites;
-  options=[...liveOptions,...options];
+  liveSharedJobs().forEach(job=>{
+    const label=String(job.site||job.customer||"").trim();
+    if(label) options.unshift(label);
+  });
   const weekEnding=document.getElementById("timesheetDate")?.value;
   const date=dateForTimesheetDay(weekEnding,day);
   if(isBankHolidayDate(date)) options=options.filter(s=>s!=="Holiday");
-  return [...new Set(options)];
+  return [...new Set(options.filter(Boolean))];
+}
+function liveJobsForSite(site) {
+  const all=liveSharedJobs();
+  if(!site || site==="Manual") return all;
+  return all.filter(job=>jobMatchesSite(job,site));
+}
+function siteOptionsForDay(day) {
+  return activeSiteOptionsForDay(day);
 }
 function newJob(day) { return {id:Date.now()+Math.random(),day,site:"",manualSite:"",siteAddress:"",jobNo:"",jobRef:"",customer:"",projectTitle:"",costingType:"",description:"",start:"",finish:"",a:0,b:0,c:0,travel:0,away:0,holidayHours:0,manual:false}; }
 function resetJobs() { jobs=days.map(d=>newJob(d)); }
@@ -621,6 +644,18 @@ function updateSite(id,value) {
   if(value==="Bank Holiday") { j.description="Bank holiday pay"; j.start=""; j.finish=""; j.a=8; j.b=0; j.c=0; j.travel=0; j.away=0; j.holidayHours=0; j.manual=true; }
   renderAll();
 }
+function updateLinkedJob(id,ref) {
+  const j=jobs.find(x=>String(x.id)===String(id)); if(!j) return;
+  if(!ref) {
+    j.jobRef=""; j.jobNo=""; j.customer=""; j.projectTitle=""; j.costingType="";
+    renderAll();
+    return;
+  }
+  const shared=findSharedJob(ref);
+  if(!shared) { alert("That live job could not be found. Press Refresh Live Jobs and try again."); return; }
+  j.jobRef=shared.jobRef; j.jobNo=shared.jobRef; j.customer=shared.customer||""; j.site=shared.site||j.site||shared.jobRef; j.siteAddress=shared.address||j.siteAddress||""; j.manualSite=""; j.projectTitle=shared.projectTitle||""; j.costingType=shared.costingType||""; j.description=shared.projectTitle||shared.scope||j.description||""; j.manual=false;
+  renderAll();
+}
 function updateJob(id,field,value) {
   const j=jobs.find(x=>String(x.id)===String(id)); if(!j) return; const oldDay=j.day; j[field]=value;
   if(field==="day" && (value==="Saturday"||value==="Sunday") && (j.site==="Holiday"||j.site==="Bank Holiday")) { j.site=""; j.description=""; j.a=0; j.b=0; j.c=0; j.holidayHours=0; j.manual=false; }
@@ -643,11 +678,15 @@ function jobHtml(j,i) {
   const manualSiteHtml=j.site==="Manual"?`<div><label>Enter Site Location</label><input value="${j.manualSite||""}" oninput="updateJobText('${j.id}','manualSite',this.value)" placeholder="e.g. Coca-Cola"></div>`:"";
   const addressHtml=(j.site==="Ashco"||j.site==="Kensal")?`<div><label>${j.site} Site Address</label><input value="${j.siteAddress||""}" oninput="updateJobText('${j.id}','siteAddress',this.value)" placeholder="Enter site address"></div>`:"";
   const linked=j.jobRef?`<p class="liveJobHelp"><strong>Linked live job:</strong> ${esc(j.jobRef)} — ${esc(j.customer||"")} / ${esc(j.site||"")}<br>${esc(j.projectTitle||"")} ${j.costingType?`<span class="pill">${esc(j.costingType)}</span>`:""}</p>`:"";
+  const availableLiveJobs=liveJobsForSite(j.site);
+  const liveJobSelect=(j.site && !["Manual","Holiday","Bank Holiday"].includes(j.site))?`<div><label>Live Job Number</label><select onchange="updateLinkedJob('${j.id}',this.value)"><option value="">${availableLiveJobs.length?"Select active job":"No active jobs for this site"}</option>${availableLiveJobs.map(job=>`<option value="${esc(job.jobRef)}" ${j.jobRef===job.jobRef?"selected":""}>${esc(sharedJobLabel(job))}</option>`).join("")}</select><p class="muted small" style="margin-top:6px">${availableLiveJobs.length?"Pick the live job number from the job schedule.":"If the job is not listed, enter the job/works description manually below."}</p></div>`:"";
+  const jobNoLabel=j.jobRef?"Linked Job No.":"Manual Job No.";
   return `<div class="job">
     <div class="jobTitle"><strong>Job ${i+1} — ${j.day}</strong><button class="btnRed" onclick="removeJob('${j.id}')">Remove</button></div>
     <div class="grid grid4">
-      <div><label>Job No.</label><input value="${j.jobNo||""}" oninput="updateJobText('${j.id}','jobNo',this.value)" placeholder="Job no."></div>
       <div><label>Site / Holiday</label><select onchange="updateSite('${j.id}',this.value)"><option value="">Select site</option>${siteOptionsForDay(j.day).map(site=>`<option value="${site}" ${j.site===site?"selected":""}>${site}</option>`).join("")}</select></div>
+      ${liveJobSelect}
+      <div><label>${jobNoLabel}</label><input value="${j.jobNo||""}" oninput="updateJobText('${j.id}','jobNo',this.value)" placeholder="Job no." ${j.jobRef?"readonly":""}></div>
       ${manualSiteHtml}${addressHtml}
       <div><label>Description</label><input value="${j.description||""}" oninput="updateJobText('${j.id}','description',this.value)" placeholder="Works done"></div>
       <div><label>Move to day</label><select onchange="updateJob('${j.id}','day',this.value)">${days.map(d=>`<option ${j.day===d?"selected":""}>${d}</option>`).join("")}</select></div>
@@ -762,18 +801,25 @@ function refreshApprovalWeekSelector() {
   sel.innerHTML=options.map(d=>`<option value="${d}" ${d===approvalWeekEndingFilter?"selected":""}>${formatWeekEndingLabel(d)}</option>`).join("");
 }
 function approvalSummaryForEmployee(items) { const pending=items.filter(x=>x.status==="Pending").length; return `${items.length} timesheet${items.length===1?"":"s"}${pending?` — ${pending} pending`:""}`; }
+function employeeHasPendingApproval(items) { return (items||[]).some(x=>x.status==="Pending"); }
 function siteOptionsForSubmittedJob(timesheet,job) {
-  const liveRefs=liveSharedJobs().map(j=>j.jobRef);
   let options=(job.day==="Saturday"||job.day==="Sunday") ? sites.filter(s=>s!=="Holiday"&&s!=="Bank Holiday") : sites;
+  liveSharedJobs().forEach(shared=>{
+    const label=String(shared.site||shared.customer||"").trim();
+    if(label) options.unshift(label);
+  });
   const date=dateForTimesheetDay(timesheet.date,job.day);
   if(isBankHolidayDate(date)) options=options.filter(s=>s!=="Holiday");
-  return [...new Set([...liveRefs,...options])];
+  return [...new Set(options.filter(Boolean))];
 }
 function submittedJobEditorHtml(timesheet,job,index) {
   const siteOptions=siteOptionsForSubmittedJob(timesheet,job);
   const manualSiteHtml=job.site==="Manual"?`<div><label>Enter Site Location</label><input value="${esc(job.manualSite||job.finalSite||"")}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'manualSite',this.value)" placeholder="e.g. Coca-Cola"></div>`:"";
   const addressHtml=(job.site==="Ashco"||job.site==="Kensal")?`<div><label>${esc(job.site)} Site Address</label><input value="${esc(job.siteAddress||"")}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'siteAddress',this.value)" placeholder="Enter site address"></div>`:"";
-  return `<div class="job">\n    <div class="jobTitle"><strong>Line ${index+1} — ${esc(job.day||"")}</strong><button class="btnRed" onclick="deleteSubmittedJobLine('${timesheet.id}',${index})">Remove line</button></div>\n    <div class="grid grid4">\n      <div><label>Job No.</label><input value="${esc(job.jobNo||"")}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'jobNo',this.value)" placeholder="Job no."></div>\n      <div><label>Site / Holiday</label><select onchange="updateSubmittedSite('${timesheet.id}',${index},this.value)"><option value="">Select site</option>${siteOptions.map(site=>`<option value="${esc(site)}" ${job.site===site?"selected":""}>${esc(site)}</option>`).join("")}</select></div>\n      ${manualSiteHtml}${addressHtml}\n      <div><label>Description</label><input value="${esc(job.description||"")}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'description',this.value)" placeholder="Works done"></div>\n      <div><label>Move to day</label><select onchange="updateSubmittedJobField('${timesheet.id}',${index},'day',this.value)">${days.map(d=>`<option ${job.day===d?"selected":""}>${d}</option>`).join("")}</select></div>\n      <div><label>Site Start</label><select onchange="updateSubmittedJobField('${timesheet.id}',${index},'start',this.value)">${optionList(siteStartOptions,job.start)}</select></div>\n      <div><label>Site Finish</label><select onchange="updateSubmittedJobField('${timesheet.id}',${index},'finish',this.value)">${optionList(siteFinishOptions,job.finish)}</select></div>\n      <div><label>A Normal</label><input type="number" step="0.25" value="${esc(job.a||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'a',this.value,true)"></div>\n      <div><label>B 1.5x</label><input type="number" step="0.25" value="${esc(job.b||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'b',this.value,true)"></div>\n      <div><label>C Double</label><input type="number" step="0.25" value="${esc(job.c||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'c',this.value,true)"></div>\n      <div><label>Travel</label><input type="text" inputmode="decimal" value="${esc(job.travel||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'travel',this.value,true)" placeholder="0"></div>\n      <div><label>Working Away</label><input type="text" inputmode="decimal" value="${esc(job.away||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'away',this.value,true)" placeholder="0"></div>\n    </div>\n  </div>`;
+  const availableLiveJobs=liveJobsForSite(job.site);
+  const liveJobSelect=(job.site && !["Manual","Holiday","Bank Holiday"].includes(job.site))?`<div><label>Live Job Number</label><select onchange="updateSubmittedLinkedJob('${timesheet.id}',${index},this.value)"><option value="">${availableLiveJobs.length?"Select active job":"No active jobs for this site"}</option>${availableLiveJobs.map(shared=>`<option value="${esc(shared.jobRef)}" ${job.jobRef===shared.jobRef?"selected":""}>${esc(sharedJobLabel(shared))}</option>`).join("")}</select></div>`:"";
+  const jobNoLabel=job.jobRef?"Linked Job No.":"Manual Job No.";
+  return `<div class="job">\n    <div class="jobTitle"><strong>Line ${index+1} — ${esc(job.day||"")}</strong><button class="btnRed" onclick="deleteSubmittedJobLine('${timesheet.id}',${index})">Remove line</button></div>\n    <div class="grid grid4">\n      <div><label>Site / Holiday</label><select onchange="updateSubmittedSite('${timesheet.id}',${index},this.value)"><option value="">Select site</option>${siteOptions.map(site=>`<option value="${esc(site)}" ${job.site===site?"selected":""}>${esc(site)}</option>`).join("")}</select></div>\n      ${liveJobSelect}\n      <div><label>${jobNoLabel}</label><input value="${esc(job.jobNo||"")}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'jobNo',this.value)" placeholder="Job no." ${job.jobRef?"readonly":""}></div>\n      ${manualSiteHtml}${addressHtml}\n      <div><label>Description</label><input value="${esc(job.description||"")}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'description',this.value)" placeholder="Works done"></div>\n      <div><label>Move to day</label><select onchange="updateSubmittedJobField('${timesheet.id}',${index},'day',this.value)">${days.map(d=>`<option ${job.day===d?"selected":""}>${d}</option>`).join("")}</select></div>\n      <div><label>Site Start</label><select onchange="updateSubmittedJobField('${timesheet.id}',${index},'start',this.value)">${optionList(siteStartOptions,job.start)}</select></div>\n      <div><label>Site Finish</label><select onchange="updateSubmittedJobField('${timesheet.id}',${index},'finish',this.value)">${optionList(siteFinishOptions,job.finish)}</select></div>\n      <div><label>A Normal</label><input type="number" step="0.25" value="${esc(job.a||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'a',this.value,true)"></div>\n      <div><label>B 1.5x</label><input type="number" step="0.25" value="${esc(job.b||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'b',this.value,true)"></div>\n      <div><label>C Double</label><input type="number" step="0.25" value="${esc(job.c||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'c',this.value,true)"></div>\n      <div><label>Travel</label><input type="text" inputmode="decimal" value="${esc(job.travel||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'travel',this.value,true)" placeholder="0"></div>\n      <div><label>Working Away</label><input type="text" inputmode="decimal" value="${esc(job.away||0)}" oninput="updateSubmittedJobField('${timesheet.id}',${index},'away',this.value,true)" placeholder="0"></div>\n    </div>\n  </div>`;
 }
 function submittedTimesheetEditorHtml(timesheet) {
   return `<div class="inlineEditor">\n    <div class="bar"><div><h3>Edit submitted hours</h3><p class="muted small">Change site, start/finish, job details and hours. Press Save Changes when finished.</p></div><button class="btn2" onclick="closeSubmittedTimesheetEditor()">Close</button></div>\n    ${(timesheet.jobs||[]).map((job,index)=>submittedJobEditorHtml(timesheet,job,index)).join("")}\n    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn2" onclick="addSubmittedJobLine('${timesheet.id}')">Add line</button><button class="btn" onclick="saveSubmittedTimesheetEdit('${timesheet.id}')">Save Changes</button></div>\n  </div>`;
@@ -803,6 +849,20 @@ function updateSubmittedSite(timesheetId,index,value) {
   if(value==="Holiday") { job.description="Holiday pay"; job.start=""; job.finish=""; job.a=8; job.b=0; job.c=0; job.travel=0; job.away=0; job.holidayHours=8; job.manual=true; }
   if(value==="Bank Holiday") { job.description="Bank holiday pay"; job.start=""; job.finish=""; job.a=8; job.b=0; job.c=0; job.travel=0; job.away=0; job.holidayHours=0; job.manual=true; }
   job.finalSite=getSiteName(job); recalcSubmittedTimesheetTotals(timesheet); renderAll();
+}
+function updateSubmittedLinkedJob(timesheetId,index,ref) {
+  const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!timesheet.jobs[index]) return;
+  if(!canEditSubmittedTimesheet(timesheet)) return;
+  const job=timesheet.jobs[index];
+  if(!ref) {
+    job.jobRef=""; job.jobNo=""; job.customer=""; job.projectTitle=""; job.costingType="";
+    job.finalSite=getSiteName(job); recalcSubmittedTimesheetTotals(timesheet); renderAll(); return;
+  }
+  const shared=findSharedJob(ref);
+  if(!shared) { alert("That live job could not be found. Press Refresh Live Jobs and try again."); return; }
+  job.jobRef=shared.jobRef; job.jobNo=shared.jobRef; job.customer=shared.customer||""; job.site=shared.site||job.site||shared.jobRef; job.siteAddress=shared.address||job.siteAddress||"";
+  job.manualSite=""; job.projectTitle=shared.projectTitle||""; job.costingType=shared.costingType||""; job.description=shared.projectTitle||shared.scope||job.description||""; job.manual=false; job.finalSite=getSiteName(job);
+  recalcSubmittedTimesheetTotals(timesheet); renderAll();
 }
 function addSubmittedJobLine(timesheetId) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!canEditSubmittedTimesheet(timesheet)) return; if(!Array.isArray(timesheet.jobs)) timesheet.jobs=[]; timesheet.jobs.push({...newJob("Monday"), manual:true}); recalcSubmittedTimesheetTotals(timesheet); renderAll(); }
 function deleteSubmittedJobLine(timesheetId,index) { const timesheet=submissions.find(s=>String(s.id)===String(timesheetId)); if(!timesheet||!timesheet.jobs||!canEditSubmittedTimesheet(timesheet)) return; if(!confirm("Remove this line from the submitted timesheet?")) return; timesheet.jobs.splice(index,1); recalcSubmittedTimesheetTotals(timesheet); renderAll(); }
@@ -851,8 +911,13 @@ function renderApprovals() {
   refreshApprovalWeekSelector();
   const weekItems=approvalWeekEndingFilter?submissions.filter(s=>s.date===approvalWeekEndingFilter):submissions;
   const grouped={}; approvalSort(weekItems).forEach(s=>{ const emp=s.employee||"Unknown employee"; if(!grouped[emp]) grouped[emp]=[]; grouped[emp].push(s); });
-  const employees=Object.keys(grouped).sort((a,b)=>a.localeCompare(b));
-  ts.innerHTML=employees.length?employees.map(emp=>`<div class="approvalEmployeeGroup"><div class="approvalEmployeeHead"><strong>${esc(emp)}</strong><span class="muted small">${approvalSummaryForEmployee(grouped[emp])}</span></div>${grouped[emp].map(s=>`<div class="job"><div class="bar"><div><strong>Week ending ${formatWeekEndingLabel(s.date)||s.date}</strong><p class="muted small">Weekly totals before payroll approval.</p></div><span class="pill ${String(s.status||"Pending").toLowerCase()}">${s.status}</span></div>${weeklyTotalsHtml(s.totals)}${timesheetJobSummaryHtml(s)}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button><button class="btn2" onclick="openSubmittedTimesheetEditor('${s.id}')">Edit submitted hours</button><button class="btn2" onclick="editSubmittedTimesheetTotals('${s.id}')">Edit totals only</button><button class="btnRed" onclick="deleteSubmittedTimesheet('${s.id}')">Delete timesheet</button><button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button></div>${String(editingSubmittedTimesheetId)===String(s.id)?submittedTimesheetEditorHtml(s):""}</div>`).join("")}</div>`).join(""):`<p class='muted' style='margin-top:12px'>No timesheets submitted for this week ending.</p>`;
+  const employees=Object.keys(grouped).sort((a,b)=>{
+    const pa=employeeHasPendingApproval(grouped[a])?0:1, pb=employeeHasPendingApproval(grouped[b])?0:1;
+    return pa-pb || a.localeCompare(b);
+  });
+  const pendingItems=weekItems.filter(s=>s.status==="Pending");
+  const pendingBanner=pendingItems.length?`<div class="approvalBanner"><div><strong>${pendingItems.length} approval${pendingItems.length===1?"":"s"} needed</strong><br><span class="small">${[...new Set(pendingItems.map(s=>s.employee||"Unknown employee"))].join(", ")} ${approvalWeekEndingFilter?`— week ending ${formatWeekEndingLabel(approvalWeekEndingFilter)}`:""}</span></div><button class="btnRed" type="button" onclick="showTab('approvals')">Review Now</button></div>`:"";
+  ts.innerHTML=employees.length?pendingBanner+employees.map(emp=>`<div class="approvalEmployeeGroup ${employeeHasPendingApproval(grouped[emp])?"pendingGroup":""}"><div class="approvalEmployeeHead"><strong>${esc(emp)}</strong><span class="muted small">${approvalSummaryForEmployee(grouped[emp])}</span></div>${grouped[emp].map(s=>`<div class="job"><div class="bar"><div><strong>Week ending ${formatWeekEndingLabel(s.date)||s.date}</strong><p class="muted small">Weekly totals before payroll approval.</p></div><span class="pill ${String(s.status||"Pending").toLowerCase()}">${s.status}</span></div>${weeklyTotalsHtml(s.totals)}${timesheetJobSummaryHtml(s)}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button><button class="btn2" onclick="openSubmittedTimesheetEditor('${s.id}')">Edit submitted hours</button><button class="btn2" onclick="editSubmittedTimesheetTotals('${s.id}')">Edit totals only</button><button class="btnRed" onclick="deleteSubmittedTimesheet('${s.id}')">Delete timesheet</button><button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button></div>${String(editingSubmittedTimesheetId)===String(s.id)?submittedTimesheetEditorHtml(s):""}</div>`).join("")}</div>`).join(""):`<p class='muted' style='margin-top:12px'>No timesheets submitted for this week ending.</p>`;
   hs.innerHTML=holidayRequests.length?approvalSort(holidayRequests).map(h=>`<div class="job"><div class="bar"><strong>${h.employee} — ${h.days} days</strong><span class="pill ${h.status.toLowerCase()}">${h.status}</span></div><p class="muted small">${formatDateShort(h.from)} to ${formatDateShort(h.to)} — ${h.notes||"No notes"}</p><div style="display:flex;gap:8px;margin-top:8px"><button class="btnGreen" onclick="setStatus('holiday','${h.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('holiday','${h.id}','Rejected')">Reject</button><button class="btnRed" onclick="deleteHolidayRequest('${h.id}')">Delete</button></div></div>`).join(""):"<p class='muted'>No holiday requests.</p>";
 }
 function updateApprovalBadge() { const count=pendingApprovalCount(), badge=document.getElementById("approvalBadge"), tab=document.getElementById("tabApprovals"); if(!badge||!tab)return; badge.textContent=count; badge.classList.toggle("hidden",count===0); tab.classList.toggle("hasPending",count>0); const dash=document.getElementById("dashboardApprovalCount"); if(dash) dash.textContent=count; }
@@ -928,9 +993,55 @@ function renderLiveJobsPanel() {
   const box=document.getElementById("liveJobsList"); if(!box) return;
   const jobs=liveSharedJobs();
   box.innerHTML=jobs.length?`<div class="tableWrap"><table><thead><tr><th>Ref</th><th>Customer</th><th>Site</th><th>Project</th><th>Status</th><th>Hours</th></tr></thead><tbody>${jobs.map(job=>`<tr><td><strong>${esc(job.jobRef||"")}</strong></td><td>${esc(job.customer||"")}</td><td>${esc(job.site||"")}</td><td>${esc(job.projectTitle||"")}</td><td><span class="pill ${String(job.status||"").toLowerCase()}">${esc(job.status||"Live")}</span></td><td>${round2(job.labourActual||0)}</td></tr>`).join("")}</tbody></table></div>`:`No live jobs have been pushed from the Job Schedule app yet. Convert an accepted quote to a live job first.`;
+  updateLiveJobsAutoStatus();
 }
-function loadLiveJobsFromSharedStorage() { syncSharedJobActuals(); renderLiveJobsPanel(); renderDaySections(); }
+function lastFridayTenPm(now=new Date()) {
+  const d=new Date(now);
+  d.setHours(22,0,0,0);
+  const daysSinceFriday=(d.getDay()-5+7)%7;
+  d.setDate(d.getDate()-daysSinceFriday);
+  if(now<d) d.setDate(d.getDate()-7);
+  return d;
+}
+function nextFridayTenPm(now=new Date()) {
+  const d=lastFridayTenPm(now);
+  d.setDate(d.getDate()+7);
+  return d;
+}
+function formatDateTime(value) {
+  const d=value instanceof Date?value:new Date(value);
+  if(Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-GB",{weekday:"short",day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
+}
+function updateLiveJobsAutoStatus(message="") {
+  const box=document.getElementById("liveJobsAutoStatus"); if(!box) return;
+  const last=localStorage.getItem(LIVE_JOBS_AUTO_REFRESH_LAST_KEY);
+  const lastText=last?`Last auto-refresh: ${formatDateTime(last)}.`:"Last auto-refresh: not run yet.";
+  box.textContent=message||`${lastText} Next check: Friday 10:00pm.`;
+}
+function loadLiveJobsFromSharedStorage(showMessage=false) {
+  syncSharedJobActuals();
+  renderLiveJobsPanel();
+  renderDaySections();
+  updateLiveJobsAutoStatus("Live jobs refreshed from the Job Schedule list.");
+  if(showMessage) alert("Live jobs refreshed.");
+}
 function loadLiveJobsFromSupabase() { loadLiveJobsFromSharedStorage(); }
+function autoRefreshLiveJobsIfDue() {
+  const due=lastFridayTenPm();
+  const dueStamp=due.toISOString();
+  const last=localStorage.getItem(LIVE_JOBS_AUTO_REFRESH_LAST_KEY);
+  if(last===dueStamp || new Date()<due) { updateLiveJobsAutoStatus(); return false; }
+  loadLiveJobsFromSharedStorage(false);
+  localStorage.setItem(LIVE_JOBS_AUTO_REFRESH_LAST_KEY,dueStamp);
+  updateLiveJobsAutoStatus(`Live jobs auto-refreshed for Friday 10:00pm (${formatDateTime(due)}).`);
+  return true;
+}
+function startLiveJobsAutoRefresh() {
+  if(window.wgeLiveJobsAutoRefreshTimer) return;
+  autoRefreshLiveJobsIfDue();
+  window.wgeLiveJobsAutoRefreshTimer=setInterval(autoRefreshLiveJobsIfDue,60000);
+}
 
 function renderAll() {
   applyBankHolidaysToCurrentTimesheet();
