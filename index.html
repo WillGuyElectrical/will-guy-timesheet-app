@@ -173,10 +173,10 @@ th { color:var(--muted); font-size:12px; }
   
 <div class="card" id="liveJobsPanel">
   <h2>Live Jobs</h2>
-  <p class="muted small">Jobs accepted in the WGE Job Schedule will appear here for timesheet selection. The app auto-refreshes live jobs every Friday at 10:00pm, or catches up when it is next opened.</p>
+  <p class="muted small">Jobs accepted and converted to live work in the WGE Job Schedule appear here for timesheet selection. The app refreshes from Supabase on login and every Friday at 10:00pm, or catches up when it is next opened.</p>
   <button class="btn2" type="button" onclick="loadLiveJobsFromSharedStorage(true)">Refresh Live Jobs</button>
   <p id="liveJobsAutoStatus" class="muted small" style="margin-top:8px"></p>
-  <div id="liveJobsList" class="liveJobHelp">Live jobs load from shared local storage after quotes are converted.</div>
+  <div id="liveJobsList" class="liveJobHelp">Live jobs load from Supabase after quotes are accepted and converted to live jobs.</div>
 </div>
 
 <section id="timesheet" class="hidden">
@@ -358,6 +358,9 @@ const DEFAULT_USERS = users.map(u=>({...u}));
 const SUPABASE_URL = "https://aktpqkwilspsjdaofltw.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFrdHBxa3dpbHNwc2pkYW9mbHR3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDkxNTIsImV4cCI6MjA5NDY4NTE1Mn0.YN0FtPZWDy6Ddb_BrUazD5ecRIlo1xl58lJUd5pyxQ0";
 const WGE_SUPABASE_APP_KEY = "b7f7f971177d6ed1b358e56ff1d5f9e8fca4edaad332ed8ead7eebbc7f77141f";
+const WGE_CLOUD_TABLE = "wge_app_state";
+const WGE_LIVE_JOBS_TABLE = "live_jobs";
+const WGE_LIVE_JOBS_FALLBACK_ID = "shared_live_jobs";
 const employeeRates = {"Gary Hancock":23,"Jody Lane":22,"Paul Rush":22,"William Guy":13.31};
 const DEFAULT_EMPLOYEE_RATES = {...employeeRates};
 const workingAwayAllowanceRate = 1;
@@ -396,9 +399,66 @@ function saveSharedTimesheets(list){localStorage.setItem(SHARED_TIMESHEETS_KEY,J
 function activeTimesheetPeople(){return [...new Set([...staff,...SALARIED_STAFF])];}
 function payrollPeople(){return staff.filter(name=>!SALARIED_STAFF.includes(name));}
 function saveSharedHolidays(list){localStorage.setItem(SHARED_HOLIDAYS_KEY,JSON.stringify((list||[]).filter(h=>h&&h.status==="Approved")));}
-function liveSharedJobs(){return loadSharedJobs().filter(j=>!["Closed","Invoiced","Rejected","Quote","Draft","Superseded"].includes(String(j.status||""))); }
+function normaliseJobStatus(status,job={}) {
+  const raw=String(status||job.status||"").trim();
+  const lower=raw.toLowerCase();
+  if(lower==="quote draft"||lower==="draft") return "Quote Draft";
+  if(lower==="quote sent"||lower==="sent") return "Quote Sent";
+  if(lower==="accepted awaiting po"||lower==="accepted"||lower==="accepted awaiting instruction") return "Accepted Awaiting PO";
+  if(lower==="live not invoiced"||lower==="live"||lower==="open"||lower==="in progress") return "Live Not Invoiced";
+  if(lower==="ready to invoice"||lower==="ready") return "Ready To Invoice";
+  if(lower==="live invoiced"||lower==="invoiced"||lower==="part invoiced"||job.invoiceNo||job.invoice_no) return "Live Invoiced";
+  if(lower==="completed / closed"||lower==="completed"||lower==="closed") return "Completed / Closed";
+  if(lower==="rejected / lost"||lower==="rejected"||lower==="lost"||lower==="superseded") return "Rejected / Lost";
+  return raw||"Quote Draft";
+}
+function addDays(dateString,daysToAdd){const d=new Date((dateString||today())+"T12:00:00"); d.setDate(d.getDate()+Number(daysToAdd||0)); return localISODate(d);}
+function sharedJobFromLiveRow(row){
+  return {
+    jobRef:row.job_ref||row.jobRef||"",
+    quoteRef:row.quote_ref||row.quoteRef||row.job_ref||"",
+    customer:row.customer||"",
+    site:row.site||"",
+    projectTitle:row.project_title||row.projectTitle||"",
+    scope:row.scope||"",
+    customerOrderNo:row.customer_po||row.customerOrderNo||"",
+    status:normaliseJobStatus(row.status,row),
+    invoiceNo:row.invoice_no||row.invoiceNo||"",
+    invoicedDate:row.invoice_date||row.invoicedDate||"",
+    keepActive:!!(row.keep_active||row.keepActive),
+    closedDate:row.closed_date||row.closedDate||"",
+    updatedAt:row.updated_at||row.updatedAt||"",
+    source:"Supabase"
+  };
+}
+function sharedJobOpenForLabourEntry(job){
+  const status=normaliseJobStatus(job.status,job);
+  if(job.keepActive||job.keep_active) return true;
+  if(status==="Live Not Invoiced"||status==="Ready To Invoice") return true;
+  if(status==="Live Invoiced"){
+    const invoiceDate=job.invoicedDate||job.invoiceDate||job.invoice_date||today();
+    return today()<=addDays(invoiceDate,30);
+  }
+  return false;
+}
+function timesheetVisibilityReason(job){
+  const status=normaliseJobStatus(job.status,job);
+  if(job.keepActive||job.keep_active) return "visible - Keep Active";
+  if(status==="Quote Draft"||status==="Quote Sent") return "hidden - quote only";
+  if(status==="Accepted Awaiting PO") return "hidden - missing PO/customer instruction";
+  if(status==="Live Not Invoiced"||status==="Ready To Invoice") return "visible - live job";
+  if(status==="Live Invoiced"){
+    const invoiceDate=job.invoicedDate||job.invoiceDate||job.invoice_date||"";
+    if(invoiceDate&&today()<=addDays(invoiceDate,30)) return "visible - invoiced within 30 days";
+    return "hidden - invoiced over 30 days";
+  }
+  if(status==="Completed / Closed") return "hidden - closed";
+  if(status==="Rejected / Lost") return "hidden - rejected/lost";
+  return "hidden - unknown status";
+}
+function liveSharedJobs(){return loadSharedJobs().map(j=>({...j,status:normaliseJobStatus(j.status,j)})).filter(sharedJobOpenForLabourEntry); }
 function sharedJobLabel(job){return `${job.jobRef} - ${job.customer||""}${job.site?" / "+job.site:""}${job.projectTitle?" - "+job.projectTitle:""}`;}
-function findSharedJob(ref){return loadSharedJobs().find(j=>j.jobRef===ref);}
+function findSharedJob(ref){return loadSharedJobs().find(j=>String(j.jobRef)===String(ref));}
 function upsertSharedTimesheet(item){const list=loadSharedTimesheets(); const idx=list.findIndex(x=>String(x.id)===String(item.id)); if(idx>=0)list[idx]=item; else list.unshift(item); saveSharedTimesheets(list);}
 function payrollRateFor(employee){return employeeRates[employee]||0;}
 function lineHours(job){return round2(num(job.a)+num(job.b)+num(job.c)+num(job.travel)+num(job.away));}
@@ -432,6 +492,42 @@ async function sbGet(table) { const res=await fetch(`${SUPABASE_URL}/rest/v1/${t
 async function sbInsert(table,row) { const res=await fetch(`${SUPABASE_URL}/rest/v1/${table}`,{method:"POST",headers:supabaseHeaders(),body:JSON.stringify(row)}); if(!res.ok) throw new Error(await res.text()); const data=await res.json(); return data[0]; }
 async function sbPatch(table,id,patch) { const res=await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`,{method:"PATCH",headers:supabaseHeaders(),body:JSON.stringify(patch)}); if(!res.ok) throw new Error(await res.text()); const data=await res.json(); return data[0]; }
 async function sbDelete(table,id) { const res=await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`,{method:"DELETE",headers:supabaseHeaders()}); if(!res.ok) throw new Error(await res.text()); }
+async function fetchLiveJobsFromSupabase() {
+  try {
+    const res=await fetch(`${SUPABASE_URL}/rest/v1/${WGE_LIVE_JOBS_TABLE}?select=*&order=updated_at.desc`,{headers:supabaseHeaders({"Prefer":""})});
+    if(!res.ok) throw new Error(await res.text());
+    return (await res.json()).map(sharedJobFromLiveRow).filter(j=>j.jobRef);
+  } catch(err) {
+    console.warn("live_jobs table unavailable, trying shared fallback row.",err);
+    const res=await fetch(`${SUPABASE_URL}/rest/v1/${WGE_CLOUD_TABLE}?id=eq.${encodeURIComponent(WGE_LIVE_JOBS_FALLBACK_ID)}&select=id,payload,updated_at`,{headers:supabaseHeaders({"Prefer":""})});
+    if(!res.ok) throw new Error(await res.text());
+    const row=(await res.json())[0];
+    return (row?.payload?.jobs||[]).map(sharedJobFromLiveRow).filter(j=>j.jobRef);
+  }
+}
+async function refreshLiveJobsFromSupabase(showMessage=false) {
+  try {
+    const remote=await fetchLiveJobsFromSupabase();
+    const existing=loadSharedJobs();
+    const byRef=new Map(existing.map(j=>[String(j.jobRef),j]));
+    remote.forEach(job=>byRef.set(String(job.jobRef),{...(byRef.get(String(job.jobRef))||{}),...job,status:normaliseJobStatus(job.status,job),source:"Supabase"}));
+    saveSharedJobs([...byRef.values()]);
+    syncSharedJobActuals();
+    renderLiveJobsPanel();
+    renderDaySections();
+    updateLiveJobsAutoStatus(`Live jobs refreshed from Supabase: ${remote.length} record(s).`);
+    if(showMessage) alert(`Live jobs refreshed from Supabase: ${remote.length} record(s).`);
+    return remote;
+  } catch(err) {
+    console.error(err);
+    syncSharedJobActuals();
+    renderLiveJobsPanel();
+    renderDaySections();
+    updateLiveJobsAutoStatus("Could not refresh Supabase live jobs. Using this device's saved list.");
+    if(showMessage) alert("Could not refresh live jobs from Supabase. Using this device's saved list for now.");
+    return loadSharedJobs();
+  }
+}
 
 function dbTimesheetToApp(row) { return {id:row.id,employee:row.employee,date:row.week_ending,status:row.status||"Pending",submittedAt:row.submitted_at,totals:row.totals||{a:0,b:0,c:0,travel:0,away:0},jobs:row.jobs||[]}; }
 function appTimesheetToDb(item) { return {employee:item.employee,week_ending:item.date,status:item.status||"Pending",totals:item.totals||{},jobs:item.jobs||[]}; }
@@ -503,6 +599,7 @@ async function login() {
   document.getElementById("currentRole").textContent=currentUser.role==="admin"?"Admin access enabled":currentUser.role==="accountant"?"Accountant access enabled":"Employee access";
   document.querySelectorAll(".adminOnly").forEach(el=>el.classList.toggle("hidden",!(currentUser.role==="admin"||currentUser.role==="accountant")));
   document.querySelectorAll(".employeeOnly").forEach(el=>el.classList.toggle("hidden",currentUser.role!=="employee"));
+  await refreshLiveJobsFromSupabase(false);
   setupSelects(); wireSettingsControls(); resetJobs(); applyBankHolidaysToCurrentTimesheet(); renderAll(); startLiveJobsAutoRefresh();
 }
 function logout() { location.reload(); }
@@ -920,6 +1017,11 @@ function renderApprovals() {
   ts.innerHTML=employees.length?pendingBanner+employees.map(emp=>`<div class="approvalEmployeeGroup ${employeeHasPendingApproval(grouped[emp])?"pendingGroup":""}"><div class="approvalEmployeeHead"><strong>${esc(emp)}</strong><span class="muted small">${approvalSummaryForEmployee(grouped[emp])}</span></div>${grouped[emp].map(s=>`<div class="job"><div class="bar"><div><strong>Week ending ${formatWeekEndingLabel(s.date)||s.date}</strong><p class="muted small">Weekly totals before payroll approval.</p></div><span class="pill ${String(s.status||"Pending").toLowerCase()}">${s.status}</span></div>${weeklyTotalsHtml(s.totals)}${timesheetJobSummaryHtml(s)}<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btnGreen" onclick="setStatus('timesheet','${s.id}','Approved')">Approve</button><button class="btn2" onclick="openSubmittedTimesheetEditor('${s.id}')">Edit submitted hours</button><button class="btn2" onclick="editSubmittedTimesheetTotals('${s.id}')">Edit totals only</button><button class="btnRed" onclick="deleteSubmittedTimesheet('${s.id}')">Delete timesheet</button><button class="btnRed" onclick="setStatus('timesheet','${s.id}','Rejected')">Reject</button></div>${String(editingSubmittedTimesheetId)===String(s.id)?submittedTimesheetEditorHtml(s):""}</div>`).join("")}</div>`).join(""):`<p class='muted' style='margin-top:12px'>No timesheets submitted for this week ending.</p>`;
   hs.innerHTML=holidayRequests.length?approvalSort(holidayRequests).map(h=>`<div class="job"><div class="bar"><strong>${h.employee} — ${h.days} days</strong><span class="pill ${h.status.toLowerCase()}">${h.status}</span></div><p class="muted small">${formatDateShort(h.from)} to ${formatDateShort(h.to)} — ${h.notes||"No notes"}</p><div style="display:flex;gap:8px;margin-top:8px"><button class="btnGreen" onclick="setStatus('holiday','${h.id}','Approved')">Approve</button><button class="btnRed" onclick="setStatus('holiday','${h.id}','Rejected')">Reject</button><button class="btnRed" onclick="deleteHolidayRequest('${h.id}')">Delete</button></div></div>`).join(""):"<p class='muted'>No holiday requests.</p>";
 }
+function pendingApprovalCount() {
+  const timesheets=submissions.filter(s=>String(s.status||"Pending")==="Pending").length;
+  const holidays=holidayRequests.filter(h=>String(h.status||"Pending")==="Pending").length;
+  return timesheets+holidays;
+}
 function updateApprovalBadge() { const count=pendingApprovalCount(), badge=document.getElementById("approvalBadge"), tab=document.getElementById("tabApprovals"); if(!badge||!tab)return; badge.textContent=count; badge.classList.toggle("hidden",count===0); tab.classList.toggle("hasPending",count>0); const dash=document.getElementById("dashboardApprovalCount"); if(dash) dash.textContent=count; }
 function employeeUpdateCount() { if(!currentUser||currentUser.role!=="employee") return 0; return submissions.filter(s=>s.employee===currentUser.name&&(s.status==="Approved"||s.status==="Rejected")).length + holidayRequests.filter(h=>h.employee===currentUser.name&&(h.status==="Approved"||h.status==="Rejected")).length; }
 function updateEmployeeBadge() { const count=employeeUpdateCount(), badge=document.getElementById("employeeBadge"); if(!badge)return; badge.textContent=count; badge.classList.toggle("hidden",count===0); }
@@ -991,8 +1093,12 @@ async function adminResetPassword() { if(!currentUser||currentUser.role!=="admin
 
 function renderLiveJobsPanel() {
   const box=document.getElementById("liveJobsList"); if(!box) return;
-  const jobs=liveSharedJobs();
-  box.innerHTML=jobs.length?`<div class="tableWrap"><table><thead><tr><th>Ref</th><th>Customer</th><th>Site</th><th>Project</th><th>Status</th><th>Hours</th></tr></thead><tbody>${jobs.map(job=>`<tr><td><strong>${esc(job.jobRef||"")}</strong></td><td>${esc(job.customer||"")}</td><td>${esc(job.site||"")}</td><td>${esc(job.projectTitle||"")}</td><td><span class="pill ${String(job.status||"").toLowerCase()}">${esc(job.status||"Live")}</span></td><td>${round2(job.labourActual||0)}</td></tr>`).join("")}</tbody></table></div>`:`No live jobs have been pushed from the Job Schedule app yet. Convert an accepted quote to a live job first.`;
+  const active=liveSharedJobs();
+  const all=loadSharedJobs().map(j=>({...j,status:normaliseJobStatus(j.status,j)}));
+  const activeTable=active.length?`<div class="tableWrap"><table><thead><tr><th>Ref</th><th>Customer</th><th>Site</th><th>Project</th><th>Status</th><th>Hours</th></tr></thead><tbody>${active.map(job=>`<tr><td><strong>${esc(job.jobRef||"")}</strong></td><td>${esc(job.customer||"")}</td><td>${esc(job.site||"")}</td><td>${esc(job.projectTitle||"")}</td><td><span class="pill ${String(job.status||"").toLowerCase().replace(/[^a-z0-9]+/g,"-")}">${esc(job.status||"Live Not Invoiced")}</span></td><td>${round2(job.labourActual||0)}</td></tr>`).join("")}</tbody></table></div>`:`No selectable live jobs found. A quote must be accepted and converted to Live Not Invoiced with a PO/customer instruction before it appears here.`;
+  const isAdmin=currentUser&&(currentUser.role==="admin"||currentUser.role==="accountant");
+  const debug=isAdmin?`<h3 style="margin-top:14px">Admin Job Visibility Debug</h3><div class="tableWrap"><table><thead><tr><th>Ref</th><th>Customer / Site</th><th>Status</th><th>Shows?</th><th>Reason</th></tr></thead><tbody>${all.length?all.map(job=>{const visible=sharedJobOpenForLabourEntry(job); return `<tr><td><strong>${esc(job.jobRef||"")}</strong></td><td>${esc(job.customer||"")}<br><span class="muted small">${esc(job.site||"")}</span></td><td>${esc(job.status||"")}</td><td>${visible?"Yes":"No"}</td><td>${esc(timesheetVisibilityReason(job))}</td></tr>`;}).join(""):'<tr><td colspan="5" class="muted">No shared job records on this device yet.</td></tr>'}</tbody></table></div>`:"";
+  box.innerHTML=activeTable+debug;
   updateLiveJobsAutoStatus();
 }
 function lastFridayTenPm(now=new Date()) {
@@ -1020,13 +1126,16 @@ function updateLiveJobsAutoStatus(message="") {
   box.textContent=message||`${lastText} Next check: Friday 10:00pm.`;
 }
 function loadLiveJobsFromSharedStorage(showMessage=false) {
-  syncSharedJobActuals();
-  renderLiveJobsPanel();
-  renderDaySections();
-  updateLiveJobsAutoStatus("Live jobs refreshed from the Job Schedule list.");
-  if(showMessage) alert("Live jobs refreshed.");
+  refreshLiveJobsFromSupabase(showMessage).catch(err=>{
+    console.error(err);
+    syncSharedJobActuals();
+    renderLiveJobsPanel();
+    renderDaySections();
+    updateLiveJobsAutoStatus("Live jobs refreshed from this device's saved list.");
+    if(showMessage) alert("Live jobs refreshed from this device's saved list.");
+  });
 }
-function loadLiveJobsFromSupabase() { loadLiveJobsFromSharedStorage(); }
+function loadLiveJobsFromSupabase() { return refreshLiveJobsFromSupabase(true); }
 function autoRefreshLiveJobsIfDue() {
   const due=lastFridayTenPm();
   const dueStamp=due.toISOString();
