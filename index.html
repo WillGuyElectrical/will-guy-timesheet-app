@@ -499,10 +499,15 @@ async function fetchLiveJobsFromSupabase() {
     return (await res.json()).map(sharedJobFromLiveRow).filter(j=>j.jobRef);
   } catch(err) {
     console.warn("live_jobs table unavailable, trying shared fallback row.",err);
-    const res=await fetch(`${SUPABASE_URL}/rest/v1/${WGE_CLOUD_TABLE}?id=eq.${encodeURIComponent(WGE_LIVE_JOBS_FALLBACK_ID)}&select=id,payload,updated_at`,{headers:supabaseHeaders({"Prefer":""})});
-    if(!res.ok) throw new Error(await res.text());
-    const row=(await res.json())[0];
-    return (row?.payload?.jobs||[]).map(sharedJobFromLiveRow).filter(j=>j.jobRef);
+    const fallbackRes=await fetch(`${SUPABASE_URL}/rest/v1/${WGE_CLOUD_TABLE}?id=eq.${encodeURIComponent(WGE_LIVE_JOBS_FALLBACK_ID)}&select=id,payload,updated_at`,{headers:supabaseHeaders({"Prefer":""})});
+    if(!fallbackRes.ok) throw new Error(await fallbackRes.text());
+    const fallbackRow=(await fallbackRes.json())[0];
+    let jobs=(fallbackRow?.payload?.jobs||[]).map(sharedJobFromLiveRow).filter(j=>j.jobRef);
+    if(jobs.length) return jobs;
+    const mainRes=await fetch(`${SUPABASE_URL}/rest/v1/${WGE_CLOUD_TABLE}?id=eq.main&select=id,payload,updated_at`,{headers:supabaseHeaders({"Prefer":""})});
+    if(!mainRes.ok) throw new Error(await mainRes.text());
+    const mainRow=(await mainRes.json())[0];
+    return (mainRow?.payload?.sharedJobs||[]).map(sharedJobFromLiveRow).filter(j=>j.jobRef);
   }
 }
 async function refreshLiveJobsFromSupabase(showMessage=false) {
